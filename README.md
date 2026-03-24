@@ -1,6 +1,6 @@
-# ICON netCDF to legacy VTK
+# ICON netCDF to legacy VTK converter
 
-This small project provides a Python script, `icon2vtk.py`, that converts cell-based ICON model output from netCDF into legacy VTK files that can be opened directly in ParaView.
+This project provides a Python script, `icon2vtk.py`, that converts cell-based ICON model output from netCDF into legacy VTK files that can be opened directly in ParaView.
 
 The tool started as a simple converter for one 2-D field on the ICON grid, but it now supports a broader workflow that is useful for exploratory visualization:
 
