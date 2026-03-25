@@ -936,8 +936,10 @@ def project_mesh(
     """Project the field mesh into the requested output geometry.
 
     For ``sphere`` the original connectivity can be reused directly.  For
-    ``plate-carree`` each triangle is projected independently so cells crossing
-    the dateline can duplicate vertices and remain visually contiguous.
+    ``plate-carree`` each triangle is still projected independently so cells
+    crossing the dateline can duplicate vertices and remain visually
+    contiguous. The implementation is vectorized across all cells to avoid the
+    expensive Python loop used in the original version.
     """
     if projection == "sphere":
         return project_xyz(points, projection, radius, offset), cells
@@ -946,25 +948,66 @@ def project_mesh(
         raise ValueError(f"Unsupported projection {projection!r}")
 
     lon_deg, lat_deg = xyz_to_lonlat(points)
-    projected_cells: list[np.ndarray] = []
-    projected_points: list[np.ndarray] = []
+    cell_lon = lon_deg[cells]
+    cell_lat = lat_deg[cells]
 
-    for cell in cells:
-        cell_lat = lat_deg[cell]
-        cell_lon = unwrap_longitudes_for_cell(lon_deg[cell], cell_lat)
-        cell_lon = wrap_longitudes_to_primary_range(cell_lon)
-        if plate_carree_seam_mode == "clip":
-            cell_lon = clip_longitudes_to_primary_range(cell_lon)
-        elif plate_carree_seam_mode != "wrap":
-            raise ValueError(
-                f"Unsupported plate-carree seam mode {plate_carree_seam_mode!r}"
-            )
-        cell_points = project_lonlat(cell_lon, cell_lat, projection, radius, offset)
-        start = len(projected_points)
-        projected_points.extend(cell_points)
-        projected_cells.append(np.arange(start, start + len(cell), dtype=np.int64))
+    non_polar_mask = np.abs(cell_lat) < 89.999999
+    has_non_polar = np.any(non_polar_mask, axis=1)
+    reference_index = np.argmax(non_polar_mask, axis=1)
+    reference_lon = np.where(has_non_polar, cell_lon[np.arange(cells.shape[0]), reference_index], cell_lon[:, 0])
 
-    return np.asarray(projected_points, dtype=np.float64), np.asarray(projected_cells, dtype=np.int64)
+    adjusted_lon = (
+        reference_lon[:, np.newaxis]
+        + ((cell_lon - reference_lon[:, np.newaxis] + 180.0) % 360.0)
+        - 180.0
+    )
+
+    polar_mask = ~non_polar_mask
+    polar_rows = np.any(polar_mask, axis=1) & has_non_polar
+    if np.any(polar_rows):
+        non_polar_count = np.sum(non_polar_mask, axis=1)
+        non_polar_mean_lon = np.divide(
+            np.sum(adjusted_lon * non_polar_mask, axis=1),
+            non_polar_count,
+            out=np.zeros(cells.shape[0], dtype=np.float64),
+            where=non_polar_count > 0,
+        )
+        adjusted_lon = np.where(
+            polar_mask & polar_rows[:, np.newaxis],
+            non_polar_mean_lon[:, np.newaxis],
+            adjusted_lon,
+        )
+
+    center_lon = np.mean(adjusted_lon, axis=1)
+    wrapped_lon = adjusted_lon - 360.0 * np.floor((center_lon + 180.0) / 360.0)[:, np.newaxis]
+    wrapped_mean_lon = np.mean(wrapped_lon, axis=1)
+    wrapped_lon = np.where(
+        (wrapped_mean_lon > 180.0)[:, np.newaxis],
+        wrapped_lon - 360.0,
+        wrapped_lon,
+    )
+    wrapped_lon = np.where(
+        (wrapped_mean_lon < -180.0)[:, np.newaxis],
+        wrapped_lon + 360.0,
+        wrapped_lon,
+    )
+
+    if plate_carree_seam_mode == "clip":
+        wrapped_lon = clip_longitudes_to_primary_range(wrapped_lon)
+    elif plate_carree_seam_mode != "wrap":
+        raise ValueError(
+            f"Unsupported plate-carree seam mode {plate_carree_seam_mode!r}"
+        )
+
+    projected_points = project_lonlat(
+        wrapped_lon.reshape(-1),
+        cell_lat.reshape(-1),
+        projection,
+        radius,
+        offset,
+    )
+    projected_cells = np.arange(cells.shape[0] * cells.shape[1], dtype=np.int64).reshape(cells.shape)
+    return projected_points, projected_cells
 
 
 def iter_linestring_coords(geometry) -> list[np.ndarray]:
