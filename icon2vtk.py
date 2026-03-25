@@ -37,25 +37,25 @@ from netCDF4 import Dataset
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Read one cell-based field from an ICON netCDF file and write an "
-            "legacy VTK unstructured grid using an ICON grid file."
+            "Read a 2-D variable field and grid information from ICON "
+            "netCDF files and write a VTK unstructured grid for ParaView."
         )
     )
     parser.add_argument("data_file", help="netCDF file holding the field to export")
     parser.add_argument(
         "grid_file",
         nargs="?",
-        help="ICON grid file, e.g. icon_grid_*.nc",
+        help="ICON grid file, e.g. icon_grid_*.nc (required unless --list-variables is used)",
     )
     parser.add_argument(
         "variable",
         nargs="?",
-        help="Variable name to export",
+        help="Variable name to export (required unless --list-variables is used)",
     )
     parser.add_argument(
         "-o",
         "--output",
-        help="Output VTK file path (default: <variable>.vtk)",
+        help="Output VTK file path (default: ./<variable>.vtk in the current working directory)",
     )
     parser.add_argument(
         "--time-index",
@@ -68,8 +68,9 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=0,
         help=(
-            "Index to use for any extra non-cell dimension besides time "
-            "(default: 0)"
+            "Index to use for one extra non-singleton non-cell dimension "
+            "besides time, such as a vertical level; singleton extra "
+            "dimensions are selected automatically (default: 0)"
         ),
     )
     parser.add_argument(
@@ -86,8 +87,9 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=None,
         help=(
-            "Scale unit-sphere vertex coordinates to this radius. "
-            "Defaults to the grid attribute sphere_radius when available."
+            "Sphere radius in meters used for spherical output and as the "
+            "coordinate scale for plate-carree output. Defaults to the grid "
+            "attribute sphere_radius when available."
         ),
     )
     parser.add_argument(
@@ -150,7 +152,8 @@ def parse_args() -> argparse.Namespace:
         metavar=("LON_MIN", "LAT_MIN", "LON_MAX", "LAT_MAX"),
         help=(
             "Restrict output to a lon/lat box in degrees. Cells are selected "
-            "by ICON cell center; coastlines are clipped to the same box."
+            "by ICON cell center; coastlines and graticules are clipped to "
+            "the same box."
         ),
     )
     parser.add_argument(
@@ -161,14 +164,14 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Restrict output to a circle given by center lon/lat in degrees "
             "and radius in km. Cells are selected by ICON cell center; "
-            "coastlines are filtered to the same region."
+            "coastlines and graticules are filtered to the same region."
         ),
     )
     parser.add_argument(
         "--graticule-output",
         help=(
-            "Optional VTK output path for longitude/latitude grid lines "
-            "drawn on the sphere."
+            "Optional VTK output path for longitude/latitude graticule "
+            "lines in the selected projection."
         ),
     )
     parser.add_argument(
@@ -291,11 +294,16 @@ def circle_to_bbox(
     return (float(lon_min), lat_min, float(lon_max), lat_max)
 
 
-def subset_mesh(points: np.ndarray, cells: np.ndarray, cell_mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def subset_mesh(
+    points: np.ndarray,
+    cells: np.ndarray,
+    cell_mask: np.ndarray,
+    region_description: str = "requested region",
+) -> tuple[np.ndarray, np.ndarray]:
     """Keep only selected cells and compact the vertex array accordingly."""
     selected_cells = cells[cell_mask]
     if selected_cells.size == 0:
-        raise ValueError("No ICON cells fall inside the requested bounding box")
+        raise ValueError(f"No ICON cells fall inside the {region_description}")
 
     # VTK should only see vertices that are still referenced by the subset.  The
     # ``inverse`` mapping rewrites the old vertex ids into the compacted array.
@@ -571,7 +579,11 @@ def read_mesh(
                 cell_mask = circle_contains(clon, clat, circle, radius)
 
     if bbox is not None or circle is not None:
-        points, cells = subset_mesh(points, cells, cell_mask)
+        if bbox is not None:
+            region_description = "requested bounding box"
+        else:
+            region_description = "requested circle"
+        points, cells = subset_mesh(points, cells, cell_mask, region_description)
         if parent_cell_index is not None:
             parent_cell_index = parent_cell_index[cell_mask]
 
@@ -614,6 +626,12 @@ def read_field(
 
         selection: list[int | slice] = []
         used_extra_dim = False
+        non_singleton_extra_dims = [dim_name for dim_name, dim_size in zip(dims, shape) if dim_name not in {"time", "ncells"} and dim_size > 1]
+        if len(non_singleton_extra_dims) > 1:
+            raise ValueError(
+                f"Variable {variable_name!r} has multiple non-singleton non-cell dimensions "
+                f"{tuple(non_singleton_extra_dims)}; only one such dimension is supported"
+            )
         for dim_name, dim_size in zip(dims, shape):
             if dim_name == "ncells":
                 selection.append(slice(None))

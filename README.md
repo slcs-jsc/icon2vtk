@@ -1,4 +1,4 @@
-# ICON2VTK - ICON netCDF to legacy VTK converter
+# ICON2VTK - ICON netCDF to VTK converter
 
 This project provides a Python script, `icon2vtk.py`, that converts cell-based ICON model output from netCDF into legacy VTK files that can be opened directly in ParaView.
 
@@ -6,7 +6,7 @@ The tool started as a simple converter for one 2-D field on the ICON grid, but i
 
 - export 2-D and 3-D ICON cell fields
 - select one time index and one vertical level
-- coarsen the exported field by one ICON refinement level using parent-child metadata
+- coarsen the exported field by one or more ICON refinement levels using parent-child metadata
 - write legacy VTK in either ASCII or binary format
 - add coastline overlays from Cartopy / Natural Earth
 - add longitude-latitude graticules
@@ -48,6 +48,8 @@ Typical supported shapes are:
 - `(time, ncells)` for 2-D time-dependent fields
 - `(time, height, ncells)` for 3-D fields on vertical levels
 - `(time, singleton_dim, ncells)` for variables like 2 m temperature or 10 m wind
+
+The script supports at most one non-singleton non-cell dimension besides `time`. In practice this means one horizontal field per timestep, optionally with one additional vertical or level-like index.
 
 The script uses the ICON grid file to obtain:
 
@@ -111,7 +113,7 @@ bash run.sh
 This writes a small set of VTK files back into `example/`:
 
 - one sphere example using a 3-D field, one time index, one vertical level, coarsening, and overlays
-- one `plate-carree` example using a 2-D field, clipped seam handling, a regional subset, and overlays
+- one `plate-carree` example using a 2-D field, clipped seam handling, and overlays
 
 This is a good first check that:
 
@@ -126,14 +128,17 @@ The example directory also contains saved ParaView state files for the two examp
 
 These correspond to the outputs written by `example/run.sh`:
 
-- sphere scene:
-  - `example/sphere_ta_t1_l45.vtk`
-  - `example/sphere_coastlines.vtk`
-  - `example/sphere_graticule.vtk`
-- `plate-carree` scene:
-  - `example/plate_carree_ts_bbox.vtk`
-  - `example/plate_carree_coastlines.vtk`
-  - `example/plate_carree_graticule.vtk`
+Sphere scene files:
+
+- `example/sphere_ta_t1_l45.vtk`
+- `example/sphere_coastlines.vtk`
+- `example/sphere_graticule.vtk`
+
+Plate-carree scene files:
+
+- `example/plate_carree_ts_bbox.vtk`
+- `example/plate_carree_coastlines.vtk`
+- `example/plate_carree_graticule.vtk`
 
 Example screenshots are included as a quick visual reference:
 
@@ -162,9 +167,9 @@ python3 icon2vtk.py \
   ts
 ```
 
-This reads the variable `ts` from the ICON netCDF data file, uses the ICON grid from the grid file, and writes `example/ts.vtk` in binary VTK format by default.
+This reads the variable `ts` from the ICON netCDF data file, uses the ICON grid from the grid file, and writes `ts.vtk` in binary VTK format by default when you run the command from the repository root.
 
-If the grid file contains ICON parent-child metadata, you can coarsen the exported field by one or more refinement levels:
+If the grid file provides the ICON variable `parent_cell_index`, you can coarsen the exported field by one or more refinement levels:
 
 ```bash
 python3 icon2vtk.py \
@@ -175,7 +180,13 @@ python3 icon2vtk.py \
   -o example/ts_coarse.vtk
 ```
 
-This groups complete four-child sibling families using `parent_cell_index`, reconstructs the parent triangle, and writes the average of the sibling values onto that coarser cell. Higher values such as `--coarsen-level 2` or `3` apply the same collapse repeatedly. If you also subset the domain, incomplete families near the subset boundary are kept at their current resolution instead of being forced to coarsen.
+This groups complete four-child sibling families using `parent_cell_index`, reconstructs the parent triangle, and writes the average of the sibling values onto that coarser cell. Higher values such as `--coarsen-level 2` or `3` request repeated collapse of the same 4:1 refinement pattern.
+
+Important details:
+
+- `--coarsen-level` requires `parent_cell_index` in the grid file; otherwise the script exits with an error
+- the requested level is an upper bound, not a guarantee; the script stops early if no further complete sibling families can be collapsed and reports `requested=... applied=...` after the export
+- if you also subset the domain, incomplete families near the subset boundary are kept at their current resolution instead of being forced to coarsen
 
 ## Listing variables in a netCDF file
 
@@ -242,10 +253,10 @@ This is useful because some fields can be nearly zero, and the summary immediate
 
 ## Exporting 3-D variables
 
-For 3-D variables, the script needs both:
+For variables with one additional non-singleton dimension besides `ncells`, the script needs:
 
 - a time index
-- a level index
+- a level index for that extra dimension
 
 Example:
 
@@ -266,6 +277,8 @@ Here:
 - `--level-index 45` selects one vertical model level
 
 The output is still a surface VTK file, not a full 3-D volume. In other words, the script writes one horizontal slice over the ICON sphere for the chosen level.
+
+If a variable has more than one non-singleton non-cell dimension besides `time`, the script rejects it instead of guessing how `--level-index` should be applied.
 
 ## ASCII versus binary legacy VTK
 
@@ -307,7 +320,7 @@ python3 icon2vtk.py \
   ts \
   --time-index 1 \
   --vtk-format ascii \
-  -o example/ts_binary.vtk
+  -o example/ts_ascii.vtk
 ```
 
 ## Coastline overlays
@@ -633,6 +646,7 @@ python3 icon2vtk.py --help
 
 - `--time-index`: select one time record
 - `--level-index`: select one vertical level for 3-D fields
+- `--coarsen-level N`: coarsen by up to `N` ICON refinement levels when `parent_cell_index` is available
 - `--vtk-format ascii|binary`: choose legacy VTK encoding
 - `--bbox ...`: select a rectangular region
 - `--circle ...`: select a circular region
