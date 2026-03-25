@@ -707,6 +707,14 @@ def iter_linestring_coords(geometry) -> list[np.ndarray]:
     return []
 
 
+def split_true_runs(mask: np.ndarray) -> list[np.ndarray]:
+    true_indices = np.flatnonzero(mask)
+    if true_indices.size == 0:
+        return []
+    splits = np.where(np.diff(true_indices) != 1)[0] + 1
+    return [group for group in np.split(true_indices, splits) if group.size > 0]
+
+
 def write_coastline_vtk(
     output_path: Path,
     radius: float,
@@ -764,16 +772,9 @@ def write_coastline_vtk(
                 continue
             if circle is not None:
                 point_mask = circle_contains(coords[:, 0], coords[:, 1], circle, radius)
-                if not np.any(point_mask):
-                    continue
-                split_idx = np.where(~point_mask)[0]
-                segments = np.split(coords, split_idx)
-                filtered_segments = []
-                for segment in segments:
-                    if segment.shape[0] >= 2 and np.all(
-                        circle_contains(segment[:, 0], segment[:, 1], circle, radius)
-                    ):
-                        filtered_segments.append(segment)
+                filtered_segments = [
+                    coords[group] for group in split_true_runs(point_mask) if group.size >= 2
+                ]
                 if not filtered_segments:
                     continue
             else:
@@ -860,12 +861,13 @@ def write_graticule_vtk(
         lons = np.full_like(lats, lon)
         if circle is not None:
             mask = circle_contains(lons, lats, circle, radius)
-            if not np.any(mask):
+            segments = [
+                np.column_stack((lons[group], lats[group]))
+                for group in split_true_runs(mask)
+                if group.size >= 2
+            ]
+            if not segments:
                 continue
-            indices = np.where(mask)[0]
-            splits = np.where(np.diff(indices) != 1)[0] + 1
-            groups = np.split(indices, splits)
-            segments = [np.column_stack((lons[g], lats[g])) for g in groups if g.size >= 2]
         else:
             segments = [np.column_stack((lons, lats))]
 
@@ -888,12 +890,13 @@ def write_graticule_vtk(
             lats = np.full_like(lons, lat)
             if circle is not None:
                 mask = circle_contains(lons, lats, circle, radius)
-                if not np.any(mask):
+                segments = [
+                    np.column_stack((lons[group], lats[group]))
+                    for group in split_true_runs(mask)
+                    if group.size >= 2
+                ]
+                if not segments:
                     continue
-                indices = np.where(mask)[0]
-                splits = np.where(np.diff(indices) != 1)[0] + 1
-                groups = np.split(indices, splits)
-                segments = [np.column_stack((lons[g], lats[g])) for g in groups if g.size >= 2]
             else:
                 segments = [np.column_stack((lons, lats))]
 
@@ -959,10 +962,12 @@ def main() -> int:
         radius = read_radius(grid_path, args.radius)
         points, cells, cell_mask, parent_cell_index = read_mesh(
             grid_path,
-            radius + args.field_radius_offset,
+            radius,
             bbox=bbox,
             circle=circle,
         )
+        if args.field_radius_offset != 0.0:
+            points = points * ((radius + args.field_radius_offset) / radius)
         values, units, title = read_field(
             data_path,
             args.variable,
