@@ -6,6 +6,7 @@ The tool started as a simple converter for one 2-D field on the ICON grid, but i
 
 - export 2-D and 3-D ICON cell fields
 - select one time index and one vertical level
+- coarsen the exported field by one ICON refinement level using parent-child metadata
 - write legacy VTK in either ASCII or binary format
 - add coastline overlays from Cartopy / Natural Earth
 - add longitude-latitude graticules
@@ -116,6 +117,19 @@ python3 icon2vtk.py \
 ```
 
 This reads the variable `ts` from the ICON netCDF data file, uses the ICON grid from the grid file, and writes `example/ts.vtk` in binary VTK format by default.
+
+If the grid file contains ICON parent-child metadata, you can coarsen the exported field by one or more refinement levels:
+
+```bash
+python3 icon2vtk.py \
+  example/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
+  example/icon_grid_0049_R02B04_G.nc \
+  ts \
+  --coarsen-level 1 \
+  -o example/ts_coarse.vtk
+```
+
+This groups complete four-child sibling families using `parent_cell_index`, reconstructs the parent triangle, and writes the average of the sibling values onto that coarser cell. Higher values such as `--coarsen-level 2` or `3` apply the same collapse repeatedly. If you also subset the domain, incomplete families near the subset boundary are kept at their current resolution instead of being forced to coarsen.
 
 ## Listing variables in a netCDF file
 

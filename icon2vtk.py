@@ -51,6 +51,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--coarsen-level",
+        type=int,
+        default=0,
+        help=(
+            "Coarsen the field mesh by N ICON refinement levels using "
+            "parent-child metadata and sibling averaging (default: 0)"
+        ),
+    )
+    parser.add_argument(
         "--radius",
         type=float,
         default=None,
@@ -233,12 +242,187 @@ def subset_mesh(points: np.ndarray, cells: np.ndarray, cell_mask: np.ndarray) ->
     return subset_points, subset_cells
 
 
+def compact_cells(points: np.ndarray, cells: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    if cells.size == 0:
+        raise ValueError("No ICON cells remain after coarsening")
+    used_vertices, inverse = np.unique(cells.ravel(), return_inverse=True)
+    return points[used_vertices], inverse.reshape(cells.shape)
+
+
+def average_values(values: np.ndarray) -> float:
+    finite = values[np.isfinite(values)]
+    if finite.size == 0:
+        return math.nan
+    return float(np.mean(finite))
+
+
+def order_triangle_vertices(points: np.ndarray, vertex_ids: np.ndarray) -> np.ndarray:
+    triangle_points = points[vertex_ids]
+    centroid = np.mean(triangle_points, axis=0)
+    centroid_norm = np.linalg.norm(centroid)
+    if centroid_norm == 0.0:
+        return vertex_ids
+
+    normal = centroid / centroid_norm
+    first_vec = triangle_points[0] - centroid
+    first_norm = np.linalg.norm(first_vec)
+    if first_norm == 0.0:
+        return vertex_ids
+    axis_x = first_vec / first_norm
+    axis_y = np.cross(normal, axis_x)
+    axis_y_norm = np.linalg.norm(axis_y)
+    if axis_y_norm == 0.0:
+        return vertex_ids
+    axis_y /= axis_y_norm
+
+    rel = triangle_points - centroid
+    angles = np.arctan2(rel @ axis_y, rel @ axis_x)
+    ordered = vertex_ids[np.argsort(angles)]
+
+    ordered_points = points[ordered]
+    orientation = np.dot(
+        np.cross(ordered_points[1] - ordered_points[0], ordered_points[2] - ordered_points[0]),
+        centroid,
+    )
+    if orientation < 0.0:
+        ordered[[1, 2]] = ordered[[2, 1]]
+    return ordered
+
+
+def coarsen_one_level(
+    points: np.ndarray,
+    cells: np.ndarray,
+    values: np.ndarray,
+    cell_ids: np.ndarray,
+    cell_levels: np.ndarray,
+    candidate_level: int,
+    parent_ids: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, bool]:
+    if parent_ids.shape[0] != cells.shape[0]:
+        raise ValueError("parent id array length does not match the selected cells")
+    if cell_ids.shape[0] != cells.shape[0] or cell_levels.shape[0] != cells.shape[0]:
+        raise ValueError("cell metadata length does not match the selected cells")
+
+    families: dict[int, list[int]] = {}
+    candidate_mask = cell_levels == candidate_level
+    for cell_idx in np.flatnonzero(candidate_mask):
+        parent_idx = parent_ids[cell_idx]
+        parent_id = int(parent_idx)
+        if parent_id <= 0:
+            continue
+        families.setdefault(parent_id, []).append(cell_idx)
+
+    coarsened_cells: list[np.ndarray] = []
+    coarsened_values: list[float] = []
+    coarsened_ids: list[int] = []
+    coarsened_levels: list[int] = []
+    keep_child_mask = np.ones(cells.shape[0], dtype=bool)
+
+    for sibling_indices in families.values():
+        if len(sibling_indices) != 4:
+            continue
+
+        sibling_cells = cells[sibling_indices]
+        vertex_ids, counts = np.unique(sibling_cells.ravel(), return_counts=True)
+        parent_vertices = vertex_ids[counts == 1]
+        if parent_vertices.size != 3:
+            continue
+
+        ordered_vertices = order_triangle_vertices(points, parent_vertices.astype(np.int64))
+        coarsened_cells.append(ordered_vertices)
+        coarsened_values.append(average_values(values[np.asarray(sibling_indices, dtype=np.int64)]))
+        coarsened_ids.append(int(parent_ids[sibling_indices[0]]))
+        coarsened_levels.append(candidate_level + 1)
+        keep_child_mask[np.asarray(sibling_indices, dtype=np.int64)] = False
+
+    remaining_cells = cells[keep_child_mask]
+    remaining_values = values[keep_child_mask]
+    remaining_ids = cell_ids[keep_child_mask]
+    remaining_levels = cell_levels[keep_child_mask]
+
+    if coarsened_cells:
+        combined_cells = np.vstack((remaining_cells, np.asarray(coarsened_cells, dtype=np.int64)))
+        combined_values = np.concatenate(
+            (remaining_values, np.asarray(coarsened_values, dtype=np.float64))
+        )
+        combined_ids = np.concatenate((remaining_ids, np.asarray(coarsened_ids, dtype=np.int64)))
+        combined_levels = np.concatenate(
+            (remaining_levels, np.asarray(coarsened_levels, dtype=np.int64))
+        )
+    else:
+        combined_cells = remaining_cells
+        combined_values = remaining_values
+        combined_ids = remaining_ids
+        combined_levels = remaining_levels
+
+    compact_points, compacted_cells = compact_cells(points, combined_cells)
+    return (
+        compact_points,
+        compacted_cells,
+        combined_values,
+        combined_ids,
+        combined_levels,
+        bool(coarsened_cells),
+    )
+
+
+def coarsen_mesh(
+    points: np.ndarray,
+    cells: np.ndarray,
+    values: np.ndarray,
+    parent_cell_index: np.ndarray | None,
+    coarsen_level: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    if coarsen_level < 0:
+        raise ValueError("Coarsen level must be non-negative")
+    if coarsen_level == 0:
+        return points, cells, values, 0
+    if parent_cell_index is None:
+        raise ValueError(
+            "Grid file does not provide parent_cell_index needed for --coarsen-level"
+        )
+    if parent_cell_index.shape[0] != cells.shape[0]:
+        raise ValueError("parent_cell_index length does not match the selected cells")
+
+    current_points = points
+    current_cells = cells
+    current_values = values
+    current_cell_ids = np.arange(1, cells.shape[0] + 1, dtype=np.int64)
+    current_cell_levels = np.zeros(cells.shape[0], dtype=np.int64)
+    current_parent_ids = np.asarray(parent_cell_index, dtype=np.int64)
+    applied_levels = 0
+
+    for level in range(coarsen_level):
+        (
+            current_points,
+            current_cells,
+            current_values,
+            current_cell_ids,
+            current_cell_levels,
+            changed,
+        ) = coarsen_one_level(
+            current_points,
+            current_cells,
+            current_values,
+            current_cell_ids,
+            current_cell_levels,
+            level,
+            current_parent_ids,
+        )
+        if not changed:
+            break
+        applied_levels += 1
+        current_parent_ids = ((current_cell_ids - 1) // 4) + 1
+
+    return current_points, current_cells, current_values, applied_levels
+
+
 def read_mesh(
     grid_path: Path,
     radius_override: float | None,
     bbox: tuple[float, float, float, float] | None = None,
     circle: tuple[float, float, float] | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
     with Dataset(grid_path) as ds:
         required = [
             "vertex_of_cell",
@@ -268,6 +452,13 @@ def read_mesh(
         cells = connectivity.T - 1
         if np.any(cells < 0):
             raise ValueError("vertex_of_cell appears not to be 1-based as expected")
+        parent_cell_index = None
+        if "parent_cell_index" in ds.variables:
+            parent_cell_index = np.asarray(ds.variables["parent_cell_index"][:], dtype=np.int64)
+            if parent_cell_index.shape != (cells.shape[0],):
+                raise ValueError(
+                    "Expected parent_cell_index to have one entry per ICON cell"
+                )
 
         if bbox is not None and circle is not None:
             raise ValueError("Use either --bbox or --circle, not both")
@@ -286,8 +477,10 @@ def read_mesh(
 
     if bbox is not None or circle is not None:
         points, cells = subset_mesh(points, cells, cell_mask)
+        if parent_cell_index is not None:
+            parent_cell_index = parent_cell_index[cell_mask]
 
-    return points, cells, cell_mask
+    return points, cells, cell_mask, parent_cell_index
 
 
 def read_radius(grid_path: Path, radius_override: float | None) -> float:
@@ -761,8 +954,10 @@ def main() -> int:
     circle = tuple(args.circle) if args.circle is not None else None
 
     try:
+        if args.coarsen_level < 0:
+            raise ValueError("Coarsen level must be non-negative")
         radius = read_radius(grid_path, args.radius)
-        points, cells, cell_mask = read_mesh(
+        points, cells, cell_mask, parent_cell_index = read_mesh(
             grid_path,
             radius + args.field_radius_offset,
             bbox=bbox,
@@ -776,6 +971,15 @@ def main() -> int:
             expected_ncells=cell_mask.size,
         )
         values = values[cell_mask]
+        applied_coarsen_level = 0
+        if args.coarsen_level > 0:
+            points, cells, values, applied_coarsen_level = coarsen_mesh(
+                points,
+                cells,
+                values,
+                parent_cell_index,
+                args.coarsen_level,
+            )
         stats = summarize_values(values)
         write_legacy_vtk(
             output_path,
@@ -818,6 +1022,8 @@ def main() -> int:
         return 1
 
     print(f"Wrote {output_path} with {cells.shape[0]} cells and variable {args.variable}")
+    if args.coarsen_level != 0:
+        print(f"Coarsen level: requested={args.coarsen_level} applied={applied_coarsen_level}")
     if args.field_radius_offset != 0.0:
         print(f"Field radius offset: {args.field_radius_offset:.16g}")
     print(
