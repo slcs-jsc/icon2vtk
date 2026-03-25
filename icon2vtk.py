@@ -137,8 +137,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--vtk-format",
         choices=("ascii", "binary"),
-        default="ascii",
-        help="Legacy VTK output format (default: ascii)",
+        default="binary",
+        help="Legacy VTK output format (default: binary)",
     )
     parser.add_argument(
         "--list-variables",

@@ -115,7 +115,7 @@ python3 icon2vtk.py \
   ts
 ```
 
-This reads the variable `ts` from the data file, uses the ICON grid from the grid file, and writes `example/ts.vtk` in ASCII format by default.
+This reads the variable `ts` from the ICON netCDF data file, uses the ICON grid from the grid file, and writes `example/ts.vtk` in binary VTK format by default.
 
 ## Listing variables in a netCDF file
 
@@ -209,26 +209,33 @@ The output is still a surface VTK file, not a full 3-D volume. In other words, t
 
 ## ASCII versus binary legacy VTK
 
-By default, the script writes ASCII legacy VTK files:
-
-```bash
---vtk-format ascii
-```
-
-This is the default, so you usually do not need to specify it explicitly.
-
-ASCII is convenient because:
-
-- it is human-readable
-- it is easy to inspect or debug
-- it is simple to compare with small edits
-
-However, ASCII files are larger and slower to read and write.
-
-For better performance, you can switch to binary legacy VTK:
+By default, the script writes binary legacy VTK files:
 
 ```bash
 --vtk-format binary
+```
+
+You usually do not need to specify this explicitly.
+
+Binary output is recommended for most use cases:
+
+- smaller file size
+- faster read/write performance
+- better suited for large ICON grids and batch processing
+- when ParaView loading speed matters
+
+ASCII output is mainly useful for debugging or inspection:
+
+- human-readable text format
+- easier to inspect or diff
+- convenient for small test cases
+
+However, ASCII files are significantly larger and slower to read and write.
+
+To use ASCII instead of binary:
+
+```bash
+--vtk-format ascii
 ```
 
 Example:
@@ -239,16 +246,9 @@ python3 icon2vtk.py \
   example/icon_grid_0049_R02B04_G.nc \
   ts \
   --time-index 1 \
-  --vtk-format binary \
+  --vtk-format ascii \
   -o example/ts_binary.vtk
 ```
-
-Binary output is useful when:
-
-- the grid is large
-- you export many files
-- you use high-resolution coastline overlays
-- ParaView loading speed matters
 
 ## Coastline overlays
 
@@ -498,7 +498,6 @@ python3 icon2vtk.py \
   example/icon_grid_0049_R02B04_G.nc \
   ts \
   --time-index 1 \
-  --vtk-format binary \
   --circle 10 50 1500 \
   --field-radius-offset 5000 \
   -o example/ts_combo.vtk \
