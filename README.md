@@ -99,6 +99,52 @@ If you do not need coastline support, the required packages are only:
 
 If `cartopy` is difficult to install on your system, you can still use the script without coastline export.
 
+## Quick Start With Example Data
+
+The easiest way to try the converter is to run the bundled example script from the `example/` directory:
+
+```bash
+cd example
+bash run.sh
+```
+
+This writes a small set of VTK files back into `example/`:
+
+- one sphere example using a 3-D field, one time index, one vertical level, coarsening, and overlays
+- one `plate-carree` example using a 2-D field, clipped seam handling, a regional subset, and overlays
+
+This is a good first check that:
+
+- your Python environment can read the ICON netCDF files
+- the optional overlay dependencies are installed if you requested coastlines
+- ParaView can open the generated field and overlay files together
+
+The example directory also contains saved ParaView state files for the two example scenes:
+
+- `example/sphere.pvsm`
+- `example/plate_carree.pvsm`
+
+These correspond to the outputs written by `example/run.sh`:
+
+- sphere scene:
+  - `example/sphere_ta_t1_l45.vtk`
+  - `example/sphere_coastlines.vtk`
+  - `example/sphere_graticule.vtk`
+- `plate-carree` scene:
+  - `example/plate_carree_ts_bbox.vtk`
+  - `example/plate_carree_coastlines.vtk`
+  - `example/plate_carree_graticule.vtk`
+
+Example screenshots are included as a quick visual reference:
+
+### Sphere Example
+
+![Sphere example](example/sphere_screenshot.png)
+
+### Plate-Carree Example
+
+![Plate-carree example](example/plate_carree_screenshot.png)
+
 ## Basic command structure
 
 The minimal command is:

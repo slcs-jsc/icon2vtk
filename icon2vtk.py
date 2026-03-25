@@ -114,11 +114,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--coastline-radius-offset",
         type=float,
-        default=1000.0,
+        default=10000.0,
         help=(
             "Add this offset to the exported coastline geometry. For sphere "
             "this increases the sphere radius; for flat projections it "
-            "becomes a constant z offset (default: 1000)."
+            "becomes a constant z offset (default: 10000)."
         ),
     )
     parser.add_argument(
@@ -160,11 +160,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--graticule-radius-offset",
         type=float,
-        default=2000.0,
+        default=20000.0,
         help=(
             "Add this offset to the exported graticule geometry. For sphere "
             "this increases the sphere radius; for flat projections it "
-            "becomes a constant z offset (default: 2000)."
+            "becomes a constant z offset (default: 20000)."
         ),
     )
     parser.add_argument(
