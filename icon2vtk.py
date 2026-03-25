@@ -69,12 +69,33 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--projection",
+        choices=("sphere", "plate-carree"),
+        default="sphere",
+        help=(
+            "Geometry projection for the exported mesh and overlays "
+            "(default: sphere)"
+        ),
+    )
+    parser.add_argument(
+        "--plate-carree-seam-mode",
+        choices=("wrap", "clip"),
+        default="wrap",
+        help=(
+            "How plate-carree cells near the dateline are handled: "
+            "'wrap' keeps triangles contiguous with slight overhang, "
+            "'clip' clamps longitudes into [-180, 180] for display "
+            "(default: wrap)"
+        ),
+    )
+    parser.add_argument(
         "--field-radius-offset",
         type=float,
         default=0.0,
         help=(
-            "Add this offset to the sphere radius when writing the field mesh, "
-            "e.g. 1000.0 to lift the exported surface 1 km above the sphere."
+            "Add this offset to the exported field geometry. For sphere this "
+            "increases the sphere radius; for flat projections it becomes a "
+            "constant z offset."
         ),
     )
     parser.add_argument(
@@ -93,10 +114,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--coastline-radius-offset",
         type=float,
-        default=0.0,
+        default=1000.0,
         help=(
-            "Add this offset to the sphere radius when writing coastline "
-            "polylines, e.g. 1000.0 to lift them 1 km above the surface."
+            "Add this offset to the exported coastline geometry. For sphere "
+            "this increases the sphere radius; for flat projections it "
+            "becomes a constant z offset (default: 1000)."
         ),
     )
     parser.add_argument(
@@ -138,9 +160,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--graticule-radius-offset",
         type=float,
-        default=0.0,
+        default=2000.0,
         help=(
-            "Add this offset to the sphere radius when writing graticule lines."
+            "Add this offset to the exported graticule geometry. For sphere "
+            "this increases the sphere radius; for flat projections it "
+            "becomes a constant z offset (default: 2000)."
         ),
     )
     parser.add_argument(
@@ -683,6 +707,20 @@ def default_coastline_path(output_path: Path) -> Path:
     return output_path.with_name(f"{output_path.stem}_coastlines.vtk")
 
 
+def xyz_to_lonlat(points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    x = points[:, 0]
+    y = points[:, 1]
+    z = points[:, 2]
+    lon_deg = np.rad2deg(np.arctan2(y, x))
+    radius = np.linalg.norm(points, axis=1)
+    lat_deg = np.rad2deg(np.arctan2(z, np.hypot(x, y)))
+    zero_radius = radius == 0.0
+    if np.any(zero_radius):
+        lat_deg = lat_deg.copy()
+        lat_deg[zero_radius] = 0.0
+    return lon_deg, lat_deg
+
+
 def lonlat_to_xyz(lon_deg: np.ndarray, lat_deg: np.ndarray, radius: float) -> np.ndarray:
     lon = np.deg2rad(lon_deg)
     lat = np.deg2rad(lat_deg)
@@ -691,6 +729,127 @@ def lonlat_to_xyz(lon_deg: np.ndarray, lat_deg: np.ndarray, radius: float) -> np
     y = radius * cos_lat * np.sin(lon)
     z = radius * np.sin(lat)
     return np.column_stack((x, y, z))
+
+
+def project_lonlat(
+    lon_deg: np.ndarray,
+    lat_deg: np.ndarray,
+    projection: str,
+    radius: float,
+    offset: float = 0.0,
+) -> np.ndarray:
+    if projection == "sphere":
+        return lonlat_to_xyz(lon_deg, lat_deg, radius + offset)
+    if projection == "plate-carree":
+        x = radius * np.deg2rad(lon_deg)
+        y = radius * np.deg2rad(lat_deg)
+        z = np.full_like(x, offset, dtype=np.float64)
+        return np.column_stack((x, y, z))
+    raise ValueError(f"Unsupported projection {projection!r}")
+
+
+def project_xyz(points: np.ndarray, projection: str, radius: float, offset: float = 0.0) -> np.ndarray:
+    if projection == "sphere":
+        if offset == 0.0:
+            return points
+        if radius == 0.0:
+            raise ValueError("Cannot apply a sphere offset when radius is zero")
+        scale = (radius + offset) / radius
+        return points * scale
+    lon_deg, lat_deg = xyz_to_lonlat(points)
+    return project_lonlat(lon_deg, lat_deg, projection, radius, offset)
+
+
+def unwrap_longitudes_for_cell(lon_deg: np.ndarray, lat_deg: np.ndarray) -> np.ndarray:
+    non_polar_mask = np.abs(lat_deg) < 89.999999
+    if np.any(non_polar_mask):
+        reference_lon = float(lon_deg[np.flatnonzero(non_polar_mask)[0]])
+    else:
+        reference_lon = float(lon_deg[0])
+
+    adjusted_lon = reference_lon + ((lon_deg - reference_lon + 180.0) % 360.0) - 180.0
+    polar_mask = ~non_polar_mask
+    if np.any(polar_mask) and np.any(non_polar_mask):
+        adjusted_lon = adjusted_lon.copy()
+        adjusted_lon[polar_mask] = float(np.mean(adjusted_lon[non_polar_mask]))
+    return adjusted_lon
+
+
+def wrap_longitudes_to_primary_range(lon_deg: np.ndarray) -> np.ndarray:
+    wrapped_lon = lon_deg.copy()
+    center_lon = float(np.mean(wrapped_lon))
+    wrapped_lon -= 360.0 * math.floor((center_lon + 180.0) / 360.0)
+    if np.mean(wrapped_lon) > 180.0:
+        wrapped_lon -= 360.0
+    elif np.mean(wrapped_lon) < -180.0:
+        wrapped_lon += 360.0
+    return wrapped_lon
+
+
+def clip_longitudes_to_primary_range(lon_deg: np.ndarray) -> np.ndarray:
+    return np.clip(lon_deg, -180.0, 180.0)
+
+
+def unwrap_longitudes_for_polyline(lon_deg: np.ndarray) -> np.ndarray:
+    return np.rad2deg(np.unwrap(np.deg2rad(lon_deg)))
+
+
+def project_polyline(
+    lon_deg: np.ndarray,
+    lat_deg: np.ndarray,
+    projection: str,
+    radius: float,
+    offset: float = 0.0,
+    plate_carree_seam_mode: str = "wrap",
+) -> np.ndarray:
+    if projection != "plate-carree":
+        return project_lonlat(lon_deg, lat_deg, projection, radius, offset)
+
+    adjusted_lon = unwrap_longitudes_for_polyline(lon_deg)
+    adjusted_lon = wrap_longitudes_to_primary_range(adjusted_lon)
+    if plate_carree_seam_mode == "clip":
+        adjusted_lon = clip_longitudes_to_primary_range(adjusted_lon)
+    elif plate_carree_seam_mode != "wrap":
+        raise ValueError(
+            f"Unsupported plate-carree seam mode {plate_carree_seam_mode!r}"
+        )
+    return project_lonlat(adjusted_lon, lat_deg, projection, radius, offset)
+
+
+def project_mesh(
+    points: np.ndarray,
+    cells: np.ndarray,
+    projection: str,
+    radius: float,
+    offset: float = 0.0,
+    plate_carree_seam_mode: str = "wrap",
+) -> tuple[np.ndarray, np.ndarray]:
+    if projection == "sphere":
+        return project_xyz(points, projection, radius, offset), cells
+
+    if projection != "plate-carree":
+        raise ValueError(f"Unsupported projection {projection!r}")
+
+    lon_deg, lat_deg = xyz_to_lonlat(points)
+    projected_cells: list[np.ndarray] = []
+    projected_points: list[np.ndarray] = []
+
+    for cell in cells:
+        cell_lat = lat_deg[cell]
+        cell_lon = unwrap_longitudes_for_cell(lon_deg[cell], cell_lat)
+        cell_lon = wrap_longitudes_to_primary_range(cell_lon)
+        if plate_carree_seam_mode == "clip":
+            cell_lon = clip_longitudes_to_primary_range(cell_lon)
+        elif plate_carree_seam_mode != "wrap":
+            raise ValueError(
+                f"Unsupported plate-carree seam mode {plate_carree_seam_mode!r}"
+            )
+        cell_points = project_lonlat(cell_lon, cell_lat, projection, radius, offset)
+        start = len(projected_points)
+        projected_points.extend(cell_points)
+        projected_cells.append(np.arange(start, start + len(cell), dtype=np.int64))
+
+    return np.asarray(projected_points, dtype=np.float64), np.asarray(projected_cells, dtype=np.int64)
 
 
 def iter_linestring_coords(geometry) -> list[np.ndarray]:
@@ -717,12 +876,14 @@ def split_true_runs(mask: np.ndarray) -> list[np.ndarray]:
 
 def write_coastline_vtk(
     output_path: Path,
+    projection: str,
     radius: float,
     resolution: str,
     radius_offset: float = 0.0,
     bbox: tuple[float, float, float, float] | None = None,
     circle: tuple[float, float, float] | None = None,
     vtk_format: str = "ascii",
+    plate_carree_seam_mode: str = "wrap",
 ) -> int:
     try:
         import cartopy.io.shapereader as shpreader
@@ -780,9 +941,16 @@ def write_coastline_vtk(
             else:
                 filtered_segments = [coords]
             for segment in filtered_segments:
-                xyz = lonlat_to_xyz(segment[:, 0], segment[:, 1], radius + radius_offset)
-                all_points.append(xyz)
-                line_lengths.append(int(xyz.shape[0]))
+                projected = project_polyline(
+                    segment[:, 0],
+                    segment[:, 1],
+                    projection,
+                    radius,
+                    radius_offset,
+                    plate_carree_seam_mode,
+                )
+                all_points.append(projected)
+                line_lengths.append(int(projected.shape[0]))
 
     if not all_points:
         raise RuntimeError("No coastline geometries were found in the Cartopy dataset")
@@ -829,12 +997,14 @@ def build_axis_values(step: float, start: float, end: float) -> list[float]:
 
 def write_graticule_vtk(
     output_path: Path,
+    projection: str,
     radius: float,
     spacing: tuple[float, float],
     radius_offset: float = 0.0,
     bbox: tuple[float, float, float, float] | None = None,
     circle: tuple[float, float, float] | None = None,
     vtk_format: str = "ascii",
+    plate_carree_seam_mode: str = "wrap",
 ) -> int:
     dlon, dlat = spacing
     if dlon <= 0.0 or dlat <= 0.0:
@@ -872,9 +1042,16 @@ def write_graticule_vtk(
             segments = [np.column_stack((lons, lats))]
 
         for segment in segments:
-            xyz = lonlat_to_xyz(segment[:, 0], segment[:, 1], radius + radius_offset)
-            all_points.append(xyz)
-            line_lengths.append(int(xyz.shape[0]))
+            projected = project_polyline(
+                segment[:, 0],
+                segment[:, 1],
+                projection,
+                radius,
+                radius_offset,
+                plate_carree_seam_mode,
+            )
+            all_points.append(projected)
+            line_lengths.append(int(projected.shape[0]))
 
     lon_range_crosses_dateline = lon_min > lon_max
     for lat in lat_values:
@@ -901,9 +1078,16 @@ def write_graticule_vtk(
                 segments = [np.column_stack((lons, lats))]
 
             for segment in segments:
-                xyz = lonlat_to_xyz(segment[:, 0], segment[:, 1], radius + radius_offset)
-                all_points.append(xyz)
-                line_lengths.append(int(xyz.shape[0]))
+                projected = project_polyline(
+                    segment[:, 0],
+                    segment[:, 1],
+                    projection,
+                    radius,
+                    radius_offset,
+                    plate_carree_seam_mode,
+                )
+                all_points.append(projected)
+                line_lengths.append(int(projected.shape[0]))
 
     if not all_points:
         raise RuntimeError("No graticule lines were generated for the requested region")
@@ -966,8 +1150,6 @@ def main() -> int:
             bbox=bbox,
             circle=circle,
         )
-        if args.field_radius_offset != 0.0:
-            points = points * ((radius + args.field_radius_offset) / radius)
         values, units, title = read_field(
             data_path,
             args.variable,
@@ -985,6 +1167,14 @@ def main() -> int:
                 parent_cell_index,
                 args.coarsen_level,
             )
+        points, cells = project_mesh(
+            points,
+            cells,
+            args.projection,
+            radius,
+            args.field_radius_offset,
+            args.plate_carree_seam_mode,
+        )
         stats = summarize_values(values)
         write_legacy_vtk(
             output_path,
@@ -1004,29 +1194,37 @@ def main() -> int:
             coastline_path = Path(args.coastline_output)
             coastline_count = write_coastline_vtk(
                 coastline_path,
+                projection=args.projection,
                 radius=radius,
                 resolution=args.coastline_resolution,
                 radius_offset=args.coastline_radius_offset,
                 bbox=bbox,
                 circle=circle,
                 vtk_format=args.vtk_format,
+                plate_carree_seam_mode=args.plate_carree_seam_mode,
             )
         if args.graticule_output:
             graticule_path = Path(args.graticule_output)
             graticule_count = write_graticule_vtk(
                 graticule_path,
+                projection=args.projection,
                 radius=radius,
                 spacing=tuple(args.graticule_spacing),
                 radius_offset=args.graticule_radius_offset,
                 bbox=bbox,
                 circle=circle,
                 vtk_format=args.vtk_format,
+                plate_carree_seam_mode=args.plate_carree_seam_mode,
             )
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
     print(f"Wrote {output_path} with {cells.shape[0]} cells and variable {args.variable}")
+    if args.projection != "sphere":
+        print(f"Projection: {args.projection}")
+    if args.projection == "plate-carree":
+        print(f"Plate-carree seam mode: {args.plate_carree_seam_mode}")
     if args.coarsen_level != 0:
         print(f"Coarsen level: requested={args.coarsen_level} applied={applied_coarsen_level}")
     if args.field_radius_offset != 0.0:
