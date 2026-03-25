@@ -99,7 +99,7 @@ If you do not need coastline support, the required packages are only:
 
 If `cartopy` is difficult to install on your system, you can still use the script without coastline export.
 
-## Quick Start With Example Data
+## Quick start with example data
 
 The easiest way to try the converter is to run the bundled example script from the `example/` directory:
 
@@ -137,11 +137,11 @@ These correspond to the outputs written by `example/run.sh`:
 
 Example screenshots are included as a quick visual reference:
 
-### Sphere Example
+### Sphere example
 
 ![Sphere example](example/sphere_screenshot.png)
 
-### Plate-Carree Example
+### Plate-carree example
 
 ![Plate-carree example](example/plate_carree_screenshot.png)
 
