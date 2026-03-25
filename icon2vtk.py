@@ -1,5 +1,27 @@
 #!/usr/bin/env python3
-"""Convert a cell-based 2-D ICON netCDF field to ASCII legacy VTK."""
+"""Convert ICON cell-based netCDF data into legacy VTK for ParaView.
+
+The script combines two inputs:
+
+- an ICON data file containing one or more variables on the ``ncells`` grid
+- an ICON grid file containing the triangular mesh geometry
+
+The export target is a legacy VTK unstructured grid made of triangles.  ParaView
+can read that format directly, which makes it a convenient bridge from ICON's
+netCDF representation into an interactive visualization workflow.
+
+Although the core task is simple, there are a few ICON-specific details that
+are easy to miss when reading the code:
+
+- ICON stores cell connectivity with 1-based indices, while NumPy uses 0-based
+  indexing, so the mesh reader normalizes the connectivity immediately.
+- Variables may have extra dimensions such as ``time`` or vertical levels; the
+  field reader resolves those to one horizontal slice before export.
+- Optional mesh coarsening reconstructs parent triangles from four sibling
+  child triangles using ICON parent-child metadata.
+- ``plate-carree`` output needs special longitude handling near the dateline so
+  individual cells and polylines stay visually continuous.
+"""
 
 from __future__ import annotations
 
@@ -182,12 +204,18 @@ def parse_args() -> argparse.Namespace:
 
 
 def choose_output_path(args: argparse.Namespace) -> Path:
+    """Return the explicit output path or fall back to ``<variable>.vtk``."""
     if args.output:
         return Path(args.output)
     return Path(f"{args.variable}.vtk")
 
 
 def bbox_contains(lon_deg: np.ndarray, lat_deg: np.ndarray, bbox: tuple[float, float, float, float]) -> np.ndarray:
+    """Return a boolean mask for points whose lon/lat fall inside a bbox.
+
+    The bbox may cross the dateline. In that case ``lon_min > lon_max`` and the
+    longitude test is interpreted as two intervals joined across +/-180 degrees.
+    """
     lon_min, lat_min, lon_max, lat_max = bbox
     lat_mask = (lat_deg >= lat_min) & (lat_deg <= lat_max)
     if lon_min <= lon_max:
@@ -198,6 +226,7 @@ def bbox_contains(lon_deg: np.ndarray, lat_deg: np.ndarray, bbox: tuple[float, f
 
 
 def normalize_lon(lon_deg: np.ndarray) -> np.ndarray:
+    """Map longitudes into the conventional ``[-180, 180)`` range."""
     return ((lon_deg + 180.0) % 360.0) - 180.0
 
 
@@ -208,6 +237,7 @@ def great_circle_distance_km(
     center_lat_deg: float,
     radius_m: float,
 ) -> np.ndarray:
+    """Compute spherical great-circle distances with the haversine formula."""
     lon1 = np.deg2rad(normalize_lon(lon_deg))
     lat1 = np.deg2rad(lat_deg)
     lon2 = math.radians(((center_lon_deg + 180.0) % 360.0) - 180.0)
@@ -227,6 +257,7 @@ def circle_contains(
     circle: tuple[float, float, float],
     sphere_radius_m: float,
 ) -> np.ndarray:
+    """Return a boolean mask for points lying inside the requested circle."""
     center_lon, center_lat, radius_km = circle
     distance_km = great_circle_distance_km(
         lon_deg,
@@ -242,6 +273,11 @@ def circle_to_bbox(
     circle: tuple[float, float, float],
     sphere_radius_m: float,
 ) -> tuple[float, float, float, float]:
+    """Build a coarse lon/lat bbox that fully contains the requested circle.
+
+    This is used as a cheap first spatial filter for overlays.  It is not the
+    exact circle boundary; exact filtering is applied separately where needed.
+    """
     center_lon, center_lat, radius_km = circle
     angular_radius_deg = math.degrees((radius_km * 1000.0) / sphere_radius_m)
     lat_min = max(-90.0, center_lat - angular_radius_deg)
@@ -256,10 +292,13 @@ def circle_to_bbox(
 
 
 def subset_mesh(points: np.ndarray, cells: np.ndarray, cell_mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Keep only selected cells and compact the vertex array accordingly."""
     selected_cells = cells[cell_mask]
     if selected_cells.size == 0:
         raise ValueError("No ICON cells fall inside the requested bounding box")
 
+    # VTK should only see vertices that are still referenced by the subset.  The
+    # ``inverse`` mapping rewrites the old vertex ids into the compacted array.
     used_vertices, inverse = np.unique(selected_cells.ravel(), return_inverse=True)
     subset_points = points[used_vertices]
     subset_cells = inverse.reshape(selected_cells.shape)
@@ -267,6 +306,7 @@ def subset_mesh(points: np.ndarray, cells: np.ndarray, cell_mask: np.ndarray) ->
 
 
 def compact_cells(points: np.ndarray, cells: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Remove unused vertices after topology-changing operations such as coarsening."""
     if cells.size == 0:
         raise ValueError("No ICON cells remain after coarsening")
     used_vertices, inverse = np.unique(cells.ravel(), return_inverse=True)
@@ -274,6 +314,7 @@ def compact_cells(points: np.ndarray, cells: np.ndarray) -> tuple[np.ndarray, np
 
 
 def average_values(values: np.ndarray) -> float:
+    """Average only the finite values and propagate all-NaN input as ``nan``."""
     finite = values[np.isfinite(values)]
     if finite.size == 0:
         return math.nan
@@ -281,6 +322,13 @@ def average_values(values: np.ndarray) -> float:
 
 
 def order_triangle_vertices(points: np.ndarray, vertex_ids: np.ndarray) -> np.ndarray:
+    """Return the three triangle vertices in a stable, outward-facing order.
+
+    When a parent triangle is reconstructed from four child triangles, the three
+    corner vertices are found as an unordered set.  VTK can still draw a
+    triangle from any order, but a consistent orientation avoids flipped
+    normals and makes the reconstructed topology easier to reason about.
+    """
     triangle_points = points[vertex_ids]
     centroid = np.mean(triangle_points, axis=0)
     centroid_norm = np.linalg.norm(centroid)
@@ -322,6 +370,15 @@ def coarsen_one_level(
     candidate_level: int,
     parent_ids: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, bool]:
+    """Collapse one ICON refinement level where complete sibling families exist.
+
+    ICON refinement splits one parent triangle into four child triangles.  If
+    all four siblings are present, we reconstruct the parent triangle from the
+    three outer vertices and assign it the mean of the four child values.
+
+    Incomplete families are intentionally left untouched.  This matters for
+    subsets near the selection boundary, where only some children may survive.
+    """
     if parent_ids.shape[0] != cells.shape[0]:
         raise ValueError("parent id array length does not match the selected cells")
     if cell_ids.shape[0] != cells.shape[0] or cell_levels.shape[0] != cells.shape[0]:
@@ -348,6 +405,9 @@ def coarsen_one_level(
 
         sibling_cells = cells[sibling_indices]
         vertex_ids, counts = np.unique(sibling_cells.ravel(), return_counts=True)
+        # In the four-child pattern, the parent corners are exactly the vertices
+        # that appear once across the sibling union. Interior split vertices are
+        # shared and therefore have a higher multiplicity.
         parent_vertices = vertex_ids[counts == 1]
         if parent_vertices.size != 3:
             continue
@@ -359,6 +419,7 @@ def coarsen_one_level(
         coarsened_levels.append(candidate_level + 1)
         keep_child_mask[np.asarray(sibling_indices, dtype=np.int64)] = False
 
+    # Keep all cells that were not replaced by a reconstructed parent.
     remaining_cells = cells[keep_child_mask]
     remaining_values = values[keep_child_mask]
     remaining_ids = cell_ids[keep_child_mask]
@@ -397,6 +458,7 @@ def coarsen_mesh(
     parent_cell_index: np.ndarray | None,
     coarsen_level: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    """Apply ``coarsen_one_level`` repeatedly up to the requested depth."""
     if coarsen_level < 0:
         raise ValueError("Coarsen level must be non-negative")
     if coarsen_level == 0:
@@ -411,6 +473,7 @@ def coarsen_mesh(
     current_points = points
     current_cells = cells
     current_values = values
+    # ICON metadata uses 1-based cell ids, so we mirror that convention here.
     current_cell_ids = np.arange(1, cells.shape[0] + 1, dtype=np.int64)
     current_cell_levels = np.zeros(cells.shape[0], dtype=np.int64)
     current_parent_ids = np.asarray(parent_cell_index, dtype=np.int64)
@@ -436,6 +499,9 @@ def coarsen_mesh(
         if not changed:
             break
         applied_levels += 1
+        # After the first collapse we no longer have original grid metadata for
+        # the synthetic coarse mesh.  ICON's regular 4:1 refinement pattern lets
+        # us infer the next parent ids from the current 1-based cell ids.
         current_parent_ids = ((current_cell_ids - 1) // 4) + 1
 
     return current_points, current_cells, current_values, applied_levels
@@ -447,6 +513,7 @@ def read_mesh(
     bbox: tuple[float, float, float, float] | None = None,
     circle: tuple[float, float, float] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
+    """Read the ICON triangular mesh and optional region-selection metadata."""
     with Dataset(grid_path) as ds:
         required = [
             "vertex_of_cell",
@@ -473,6 +540,8 @@ def read_mesh(
                 "Expected vertex_of_cell to have shape (3, ncells) for triangular ICON cells"
             )
 
+        # ICON stores vertex ids as 1-based indices with shape (3, ncells).
+        # VTK/NumPy expect per-cell rows with 0-based indices.
         cells = connectivity.T - 1
         if np.any(cells < 0):
             raise ValueError("vertex_of_cell appears not to be 1-based as expected")
@@ -492,6 +561,8 @@ def read_mesh(
         else:
             if "clon" not in ds.variables or "clat" not in ds.variables:
                 raise ValueError("Grid file is missing clon/clat needed for region selection")
+            # Region selection uses cell centers rather than polygon overlap
+            # tests. This keeps the selection logic simple and predictable.
             clon = np.rad2deg(np.asarray(ds.variables["clon"][:], dtype=np.float64))
             clat = np.rad2deg(np.asarray(ds.variables["clat"][:], dtype=np.float64))
             if bbox is not None:
@@ -508,6 +579,7 @@ def read_mesh(
 
 
 def read_radius(grid_path: Path, radius_override: float | None) -> float:
+    """Read the sphere radius from the grid file unless the user overrides it."""
     if radius_override is not None:
         return float(radius_override)
     with Dataset(grid_path) as ds:
@@ -521,6 +593,12 @@ def read_field(
     level_index: int,
     expected_ncells: int,
 ) -> tuple[np.ndarray, str | None, str]:
+    """Read one ICON variable and resolve it to a 1-D array over ``ncells``.
+
+    The variable may depend on ``time`` and on one additional non-cell
+    dimension such as ``height``.  Every non-``ncells`` dimension is reduced to
+    a single index so the result always matches the horizontal mesh.
+    """
     with Dataset(data_path) as ds:
         if variable_name not in ds.variables:
             available = ", ".join(ds.variables.keys())
@@ -546,6 +624,10 @@ def read_field(
                     )
                 selection.append(time_index)
             else:
+                # ICON files often contain singleton helper dimensions such as
+                # ``height_2m`` or ``height_10m``. Those are selected
+                # automatically, while real multi-level dimensions use the
+                # requested ``level_index``.
                 idx = 0 if dim_size == 1 else level_index
                 if not 0 <= idx < dim_size:
                     raise IndexError(
@@ -572,6 +654,7 @@ def read_field(
 
 
 def summarize_values(values: np.ndarray) -> dict[str, float | int]:
+    """Compute a small numeric summary for the exported slice."""
     finite = values[np.isfinite(values)]
     if finite.size == 0:
         return {
@@ -594,10 +677,12 @@ def summarize_values(values: np.ndarray) -> dict[str, float | int]:
 
 
 def format_shape(shape: tuple[int, ...]) -> str:
+    """Format a netCDF variable shape for human-readable output."""
     return "(" + ", ".join(str(v) for v in shape) + ")"
 
 
 def list_variables(data_path: Path) -> None:
+    """Print a compact overview of variables contained in the data file."""
     with Dataset(data_path) as ds:
         print()
         print(f"Variables in {data_path}:")
@@ -623,6 +708,7 @@ def list_variables(data_path: Path) -> None:
 
 
 def write_header(fh, title: str, dataset_type: str, vtk_format: str) -> None:
+    """Write the common legacy VTK file header."""
     fh.write(b"# vtk DataFile Version 3.0\n")
     fh.write(title[:255].encode("ascii", errors="replace") + b"\n")
     fh.write(vtk_format.upper().encode("ascii") + b"\n")
@@ -630,6 +716,11 @@ def write_header(fh, title: str, dataset_type: str, vtk_format: str) -> None:
 
 
 def write_numeric_array(fh, array: np.ndarray, vtk_format: str, fmt: str) -> None:
+    """Write a numeric NumPy array in legacy VTK ASCII or binary form.
+
+    Legacy binary VTK expects big-endian byte order.  NumPy arrays are normally
+    native-endian, so the binary branch converts explicitly before writing.
+    """
     if vtk_format == "ascii":
         if array.ndim == 1:
             for value in array:
@@ -668,6 +759,7 @@ def write_legacy_vtk(
     units: str | None,
     vtk_format: str,
 ) -> None:
+    """Write the field mesh as a legacy VTK ``UNSTRUCTURED_GRID``."""
     npoints = points.shape[0]
     ncells = cells.shape[0]
 
@@ -681,6 +773,8 @@ def write_legacy_vtk(
         write_numeric_array(fh, np.asarray(points, dtype=np.float64), vtk_format, "double")
 
         fh.write(f"CELLS {ncells} {ncells * 4}\n".encode("ascii"))
+        # Legacy VTK ``CELLS`` encodes each cell as ``npts id0 id1 id2 ...``.
+        # For ICON this is always ``3`` followed by three triangle vertex ids.
         cell_array = np.column_stack(
             (
                 np.full(ncells, 3, dtype=np.int32),
@@ -699,15 +793,18 @@ def write_legacy_vtk(
 
 
 def sanitize_name(name: str) -> str:
+    """Map arbitrary variable names to VTK-safe scalar array names."""
     cleaned = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in name)
     return cleaned or "field"
 
 
 def default_coastline_path(output_path: Path) -> Path:
+    """Return the default companion path for coastline output."""
     return output_path.with_name(f"{output_path.stem}_coastlines.vtk")
 
 
 def xyz_to_lonlat(points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Convert Cartesian coordinates on a sphere back to lon/lat degrees."""
     x = points[:, 0]
     y = points[:, 1]
     z = points[:, 2]
@@ -722,6 +819,7 @@ def xyz_to_lonlat(points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 
 def lonlat_to_xyz(lon_deg: np.ndarray, lat_deg: np.ndarray, radius: float) -> np.ndarray:
+    """Convert lon/lat degrees to Cartesian coordinates on a sphere."""
     lon = np.deg2rad(lon_deg)
     lat = np.deg2rad(lat_deg)
     cos_lat = np.cos(lat)
@@ -738,6 +836,7 @@ def project_lonlat(
     radius: float,
     offset: float = 0.0,
 ) -> np.ndarray:
+    """Project geographic coordinates either to the sphere or to plate-carree."""
     if projection == "sphere":
         return lonlat_to_xyz(lon_deg, lat_deg, radius + offset)
     if projection == "plate-carree":
@@ -749,6 +848,7 @@ def project_lonlat(
 
 
 def project_xyz(points: np.ndarray, projection: str, radius: float, offset: float = 0.0) -> np.ndarray:
+    """Project existing mesh vertices while preserving their current topology."""
     if projection == "sphere":
         if offset == 0.0:
             return points
@@ -761,6 +861,11 @@ def project_xyz(points: np.ndarray, projection: str, radius: float, offset: floa
 
 
 def unwrap_longitudes_for_cell(lon_deg: np.ndarray, lat_deg: np.ndarray) -> np.ndarray:
+    """Make one cell's vertex longitudes locally continuous across the dateline.
+
+    Without this step a triangle straddling +/-180 degrees would appear to span
+    almost the full width of the map in ``plate-carree`` coordinates.
+    """
     non_polar_mask = np.abs(lat_deg) < 89.999999
     if np.any(non_polar_mask):
         reference_lon = float(lon_deg[np.flatnonzero(non_polar_mask)[0]])
@@ -776,6 +881,7 @@ def unwrap_longitudes_for_cell(lon_deg: np.ndarray, lat_deg: np.ndarray) -> np.n
 
 
 def wrap_longitudes_to_primary_range(lon_deg: np.ndarray) -> np.ndarray:
+    """Shift a locally continuous longitude set near the usual display range."""
     wrapped_lon = lon_deg.copy()
     center_lon = float(np.mean(wrapped_lon))
     wrapped_lon -= 360.0 * math.floor((center_lon + 180.0) / 360.0)
@@ -787,10 +893,12 @@ def wrap_longitudes_to_primary_range(lon_deg: np.ndarray) -> np.ndarray:
 
 
 def clip_longitudes_to_primary_range(lon_deg: np.ndarray) -> np.ndarray:
+    """Clamp longitudes to the visible ``[-180, 180]`` plate-carree range."""
     return np.clip(lon_deg, -180.0, 180.0)
 
 
 def unwrap_longitudes_for_polyline(lon_deg: np.ndarray) -> np.ndarray:
+    """Unwrap a polyline so consecutive points stay geographically adjacent."""
     return np.rad2deg(np.unwrap(np.deg2rad(lon_deg)))
 
 
@@ -802,6 +910,7 @@ def project_polyline(
     offset: float = 0.0,
     plate_carree_seam_mode: str = "wrap",
 ) -> np.ndarray:
+    """Project overlay polylines with seam handling for flat map output."""
     if projection != "plate-carree":
         return project_lonlat(lon_deg, lat_deg, projection, radius, offset)
 
@@ -824,6 +933,12 @@ def project_mesh(
     offset: float = 0.0,
     plate_carree_seam_mode: str = "wrap",
 ) -> tuple[np.ndarray, np.ndarray]:
+    """Project the field mesh into the requested output geometry.
+
+    For ``sphere`` the original connectivity can be reused directly.  For
+    ``plate-carree`` each triangle is projected independently so cells crossing
+    the dateline can duplicate vertices and remain visually contiguous.
+    """
     if projection == "sphere":
         return project_xyz(points, projection, radius, offset), cells
 
@@ -853,6 +968,7 @@ def project_mesh(
 
 
 def iter_linestring_coords(geometry) -> list[np.ndarray]:
+    """Extract coordinate arrays from Shapely line-like geometries."""
     geom_type = geometry.geom_type
     if geom_type == "LineString":
         return [np.asarray(geometry.coords, dtype=np.float64)]
@@ -867,6 +983,7 @@ def iter_linestring_coords(geometry) -> list[np.ndarray]:
 
 
 def split_true_runs(mask: np.ndarray) -> list[np.ndarray]:
+    """Split a boolean mask into contiguous runs of ``True`` indices."""
     true_indices = np.flatnonzero(mask)
     if true_indices.size == 0:
         return []
@@ -885,6 +1002,7 @@ def write_coastline_vtk(
     vtk_format: str = "ascii",
     plate_carree_seam_mode: str = "wrap",
 ) -> int:
+    """Write Natural Earth coastlines as legacy VTK ``POLYDATA`` lines."""
     try:
         import cartopy.io.shapereader as shpreader
         from shapely.geometry import GeometryCollection, box
@@ -932,6 +1050,8 @@ def write_coastline_vtk(
             if coords.shape[0] < 2:
                 continue
             if circle is not None:
+                # Circle filtering is done pointwise on the sampled coastline.
+                # Segments that fall outside are split into shorter visible runs.
                 point_mask = circle_contains(coords[:, 0], coords[:, 1], circle, radius)
                 filtered_segments = [
                     coords[group] for group in split_true_runs(point_mask) if group.size >= 2
@@ -981,6 +1101,7 @@ def write_coastline_vtk(
 
 
 def build_axis_values(step: float, start: float, end: float) -> list[float]:
+    """Generate regularly spaced axis values while keeping endpoints stable."""
     if step <= 0.0:
         raise ValueError("Graticule spacing must be positive")
     values = []
@@ -1006,6 +1127,7 @@ def write_graticule_vtk(
     vtk_format: str = "ascii",
     plate_carree_seam_mode: str = "wrap",
 ) -> int:
+    """Write longitude and latitude guide lines as VTK ``POLYDATA``."""
     dlon, dlat = spacing
     if dlon <= 0.0 or dlat <= 0.0:
         raise ValueError("Graticule spacing must be positive in both longitude and latitude")
@@ -1026,6 +1148,7 @@ def write_graticule_vtk(
     all_points: list[np.ndarray] = []
     line_lengths: list[int] = []
 
+    # Meridians: constant longitude, varying latitude.
     for lon in lon_values:
         lats = np.linspace(lat_min, lat_max, 181)
         lons = np.full_like(lats, lon)
@@ -1054,6 +1177,7 @@ def write_graticule_vtk(
             line_lengths.append(int(projected.shape[0]))
 
     lon_range_crosses_dateline = lon_min > lon_max
+    # Parallels: constant latitude, varying longitude.
     for lat in lat_values:
         if lon_range_crosses_dateline:
             lon_segments = [
@@ -1118,6 +1242,7 @@ def write_graticule_vtk(
 
 
 def main() -> int:
+    """Command-line entry point."""
     args = parse_args()
     data_path = Path(args.data_file)
     if args.list_variables:
@@ -1157,6 +1282,8 @@ def main() -> int:
             args.level_index,
             expected_ncells=cell_mask.size,
         )
+        # The field is read against the full original ``ncells`` dimension and
+        # then subset to the same cell mask as the mesh so both stay aligned.
         values = values[cell_mask]
         applied_coarsen_level = 0
         if args.coarsen_level > 0:
