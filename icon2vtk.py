@@ -37,8 +37,19 @@ from netCDF4 import Dataset
 DEFAULT_OVERLAY_RADIUS_M = 6371229.0
 
 
+class BlankLineHelpFormatter(argparse.HelpFormatter):
+    """Argparse formatter that inserts a blank line after each help entry."""
+
+    def _format_action(self, action: argparse.Action) -> str:
+        text = super()._format_action(action)
+        if text.endswith("\n"):
+            return text + "\n"
+        return text + "\n\n"
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
+        formatter_class=BlankLineHelpFormatter,
         description=(
             "Read ICON netCDF data and grid information to write VTK for "
             "ParaView, or generate coastline/graticule overlays on their own."
@@ -1389,7 +1400,10 @@ def main() -> int:
             raise ValueError("Coarsen level must be non-negative")
         step_start = time.perf_counter()
         radius = resolve_radius(grid_path, args.radius)
-        log_message(f"Radius {radius:.16g} ({format_duration(time.perf_counter() - step_start)})")
+        log_message(
+            f"Using radius: {radius:.16g} m "
+            f"({format_duration(time.perf_counter() - step_start)})"
+        )
         cells = None
         stats = None
         applied_coarsen_level = 0
