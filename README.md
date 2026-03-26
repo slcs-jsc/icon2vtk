@@ -130,21 +130,13 @@ This is a good first check that:
 - the optional overlay dependencies are installed if you requested coastlines
 - ParaView can open the generated field and overlay files together
 
-The example directory also contains saved ParaView state files for the two example scenes:
+The example directory also contains saved ParaView state files and the corresponding generated files for both scenes:
 
 - `example/sphere.pvsm`
-- `example/plate_carree.pvsm`
-
-These correspond to the outputs written by `example/run.sh`:
-
-Sphere scene files:
-
 - `example/sphere_ta_t1_l45.vtk`
 - `example/sphere_coastlines.vtk`
 - `example/sphere_graticule.vtk`
-
-Plate-carree scene files:
-
+- `example/plate_carree.pvsm`
 - `example/plate_carree_ts_bbox.vtk`
 - `example/plate_carree_coastlines.vtk`
 - `example/plate_carree_graticule.vtk`
@@ -263,19 +255,27 @@ or, for the 3-D example file:
 python3 icon2vtk.py example/aes_amip_atm_3d_qp_ml_19790101T000000Z.nc --list-variables
 ```
 
-The output is shown as a compact two-line block for each variable. The first line contains the variable name and its main semantic information, and the second line contains its dimensions and technical metadata.
+The output lists each variable with its metadata and dimensions, followed by a coordinate summary that maps available time and level indices to their values.
 
 Example:
 
 ```text
-- ta: Temperature; standard_name=air_temperature; units=[K]
+- ta: long_name="Temperature"; standard_name="air_temperature"; units=[K]
     dims=time, height, ncells; shape=(2, 90, 20480); grid=unstructured; dtype=float32
+
+Coordinate values:
+
+    time[0] = 1979-01-01T00:00:00
+    time[1] = 1979-01-02T00:00:00
+
+    height[0] = 1
+    ...
 ```
 
 This makes it easier to decide:
 
 - which variable to export
-- whether the variable is 2-D or 3-D
+- whether the variable is a 2-D field directly or needs time/level selection
 - whether it lives on the ICON cell grid
 - whether you will need `--time-index` and `--level-index`
 
@@ -334,6 +334,8 @@ Here:
 - `ta` is air temperature
 - `--time-index 1` selects the second available timestep
 - `--level-index 45` selects one vertical model level
+
+Both options also accept comma-separated lists such as `--time-index 0,1` or `--level-index 10,20,50`. In that case, the script exports one VTK file per selected slice combination.
 
 The output is still a surface VTK file, not a full 3-D volume. In other words, the script writes one horizontal slice over the ICON sphere for the chosen level.
 
@@ -421,14 +423,13 @@ Typical choice:
 - use `10m` for more detailed regional figures
 
 ### Coastline radius offset
-
 Coastlines can be written at a slightly larger radius than the field:
 
 ```bash
 --coastline-radius-offset 1000
 ```
 
-This means the coastline lines are placed 1000 meters above the sphere radius. In ParaView, that helps avoid visual overlap or z-fighting when two surfaces lie exactly on top of one another.
+This helps avoid visual overlap or z-fighting when multiple datasets lie at nearly the same radius.
 
 ## Graticule overlays
 
@@ -478,14 +479,13 @@ Examples:
 Smaller spacing gives more lines and a denser visual grid.
 
 ### Graticule radius offset
-
 Like coastlines, the graticule can be lifted above the sphere:
 
 ```bash
 --graticule-radius-offset 2000
 ```
 
-This is often a good idea when coastlines, field surfaces, and grid lines are all shown together.
+This is often useful when field surfaces, coastlines, and grid lines are shown together.
 
 ## Field radius offset
 
@@ -495,12 +495,7 @@ The script can also lift the field surface itself:
 --field-radius-offset 5000
 ```
 
-This is especially useful when you want to display:
-
-- a global background field
-- plus a regional subset above it
-
-Instead of applying a `Transform` in ParaView, you can write the regional field directly at a larger radius.
+This is especially useful when you want to display a regional subset above another surface without adding a separate `Transform` step in ParaView.
 
 Example:
 
@@ -690,7 +685,6 @@ It does not currently handle:
 - edge-based variables
 - vertex-based variables
 - vector field export as VTK vectors
-- multiple timesteps or levels in one command
 - XML VTK output formats such as `.vtu` or `.vtp`
 
 ## Getting help
@@ -703,8 +697,8 @@ python3 icon2vtk.py --help
 
 ## Summary of the most important options
 
-- `--time-index`: select one time record
-- `--level-index`: select one vertical level for 3-D fields
+- `--time-index`: select one or more time records
+- `--level-index`: select one or more vertical levels for slice export
 - `--coarsen-level N`: coarsen by up to `N` ICON refinement levels when `parent_cell_index` is available
 - `--vtk-format ascii|binary`: choose legacy VTK encoding
 - `--bbox ...`: select a rectangular region
