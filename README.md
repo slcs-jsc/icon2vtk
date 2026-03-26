@@ -80,7 +80,18 @@ If you do not request coastlines, the script does not need Cartopy or Shapely.
 
 ## Installation
 
-For a simple local setup, create a virtual environment and install the dependencies from `requirements.txt`.
+For a simple local setup, you can use the bundled `setup.sh` helper script to
+create a virtual environment and install the dependencies from
+`requirements.txt`:
+
+```bash
+bash setup.sh
+```
+
+The script creates `.venv`, activates it, upgrades `pip`, and installs the
+required Python packages.
+
+If you prefer to set up the environment manually, run:
 
 ```bash
 python3 -m venv .venv
