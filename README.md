@@ -206,6 +206,7 @@ Important details:
 - `--coarsen-level` requires `parent_cell_index` in the grid file; otherwise the script exits with an error
 - the requested level is an upper bound, not a guarantee; the script stops early if no further complete sibling families can be collapsed and reports `requested=... applied=...` after the export
 - if you also subset the domain, incomplete families near the subset boundary are kept at their current resolution instead of being forced to coarsen
+- higher coarsening levels should currently be treated as approximate for visualization; the cell count may collapse as expected, but exact parent-face connectivity is not guaranteed at the deepest levels
 
 ## Overlay-only mode
 
