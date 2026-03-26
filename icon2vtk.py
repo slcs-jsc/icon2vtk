@@ -77,18 +77,20 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--time-index",
-        type=int,
-        default=0,
-        help="Index to use for the time dimension if present (default: 0)",
+        default="0",
+        help=(
+            "Time index or comma-separated list of time indices to export "
+            "if a time dimension is present (default: 0)"
+        ),
     )
     parser.add_argument(
         "--level-index",
-        type=int,
-        default=0,
+        default="0",
         help=(
-            "Index to use for one extra non-singleton non-cell dimension "
-            "besides time, such as a vertical level; singleton extra "
-            "dimensions are selected automatically (default: 0)"
+            "Level index or comma-separated list of indices for one extra "
+            "non-singleton non-cell dimension besides time, such as a "
+            "vertical level; singleton extra dimensions are selected "
+            "automatically (default: 0)"
         ),
     )
     parser.add_argument(
@@ -230,6 +232,48 @@ def choose_output_path(args: argparse.Namespace) -> Path:
     if args.output:
         return Path(args.output)
     return Path(f"{args.variable}.vtk")
+
+
+def parse_index_list(spec: str, option_name: str) -> list[int]:
+    """Parse a comma-separated CLI index list into a non-empty integer list."""
+    values: list[int] = []
+    for part in spec.split(","):
+        item = part.strip()
+        if not item:
+            raise ValueError(f"{option_name} contains an empty entry")
+        try:
+            value = int(item)
+        except ValueError as exc:
+            raise ValueError(
+                f"{option_name} must be an integer or comma-separated integers, got {spec!r}"
+            ) from exc
+        if value < 0:
+            raise ValueError(f"{option_name} must contain only non-negative indices")
+        values.append(value)
+    if not values:
+        raise ValueError(f"{option_name} must not be empty")
+    return values
+
+
+def build_output_path(
+    base_output_path: Path,
+    time_index: int | None,
+    level_index: int | None,
+    is_batch: bool,
+) -> Path:
+    """Return the output path for one export slice."""
+    if not is_batch:
+        return base_output_path
+
+    suffix_parts = []
+    if time_index is not None:
+        suffix_parts.append(f"t{time_index}")
+    if level_index is not None:
+        suffix_parts.append(f"l{level_index}")
+    suffix = "_" + "_".join(suffix_parts) if suffix_parts else ""
+    return base_output_path.with_name(
+        f"{base_output_path.stem}{suffix}{base_output_path.suffix}"
+    )
 
 
 def bbox_contains(lon_deg: np.ndarray, lat_deg: np.ndarray, bbox: tuple[float, float, float, float]) -> np.ndarray:
@@ -643,7 +687,7 @@ def read_field(
     time_index: int,
     level_index: int,
     expected_ncells: int,
-) -> tuple[np.ndarray, str | None, str]:
+) -> tuple[np.ndarray, str | None, str, bool, bool]:
     """Read one ICON variable and resolve it to a 1-D array over ``ncells``.
 
     The variable may depend on ``time`` and on one additional non-cell
@@ -665,6 +709,7 @@ def read_field(
 
         selection: list[int | slice] = []
         used_level_index = False
+        used_time_index = False
         non_singleton_extra_dims = [dim_name for dim_name, dim_size in zip(dims, shape) if dim_name not in {"time", "ncells"} and dim_size > 1]
         if len(non_singleton_extra_dims) > 1:
             raise ValueError(
@@ -680,6 +725,7 @@ def read_field(
                         f"time index {time_index} out of range for size {dim_size}"
                     )
                 selection.append(time_index)
+                used_time_index = True
             else:
                 # ICON files often contain singleton helper dimensions such as
                 # ``height_2m`` or ``height_10m``. Those are selected
@@ -706,9 +752,14 @@ def read_field(
 
         units = getattr(var, "units", None)
         long_name = getattr(var, "long_name", variable_name)
+        slice_parts = []
+        if used_time_index:
+            slice_parts.append(f"time-index={time_index}")
         if used_level_index:
-            long_name = f"{long_name} (level-index={level_index})"
-        return values, units, long_name
+            slice_parts.append(f"level-index={level_index}")
+        if slice_parts:
+            long_name = f"{long_name} ({', '.join(slice_parts)})"
+        return values, units, long_name, used_time_index, used_level_index
 
 
 def summarize_values(values: np.ndarray) -> dict[str, float | int]:
@@ -1511,6 +1562,8 @@ def main() -> int:
     circle = tuple(args.circle) if args.circle is not None else None
 
     try:
+        time_indices = parse_index_list(args.time_index, "--time-index")
+        level_indices = parse_index_list(args.level_index, "--level-index")
         if args.coarsen_level < 0:
             raise ValueError("Coarsen level must be non-negative")
         step_start = time.perf_counter()
@@ -1520,8 +1573,7 @@ def main() -> int:
             f"({format_duration(time.perf_counter() - step_start)})"
         )
         cells = None
-        stats = None
-        applied_coarsen_level = 0
+        field_exports: list[dict[str, object]] = []
         if wants_field_export:
             step_start = time.perf_counter()
             ensure_variable_exists(data_path, args.variable)
@@ -1540,58 +1592,91 @@ def main() -> int:
                 f"Mesh: {cells.shape[0]} cells, {points.shape[0]} points "
                 f"({format_duration(time.perf_counter() - step_start)})"
             )
-            step_start = time.perf_counter()
-            values, units, title = read_field(
-                data_path,
-                args.variable,
-                args.time_index,
-                args.level_index,
-                expected_ncells=cell_mask.size,
-            )
-            log_message(
-                f"Field {args.variable}: {values.size} values "
-                f"({format_duration(time.perf_counter() - step_start)})"
-            )
-            step_start = time.perf_counter()
-            # The field is read against the full original ``ncells`` dimension and
-            # then subset to the same cell mask as the mesh so both stay aligned.
-            values = values[cell_mask]
-            if args.coarsen_level > 0:
-                points, cells, values, applied_coarsen_level = coarsen_mesh(
-                    points,
-                    cells,
-                    values,
-                    parent_cell_index,
-                    args.coarsen_level,
-                )
-            points, cells = project_mesh(
-                points,
-                cells,
-                args.projection,
-                radius,
-                args.field_radius_offset,
-                args.plate_carree_seam_mode,
-            )
-            stats = summarize_values(values)
-            log_message(
-                f"Processed: {cells.shape[0]} output cells "
-                f"({format_duration(time.perf_counter() - step_start)})"
-            )
-            step_start = time.perf_counter()
-            write_legacy_vtk(
-                output_path,
-                points,
-                cells,
-                values,
-                args.variable,
-                title,
-                units,
-                args.vtk_format,
-            )
-            log_message(
-                f"Field output: {output_path} "
-                f"({format_duration(time.perf_counter() - step_start)})"
-            )
+            is_batch = (len(time_indices) * len(level_indices)) > 1
+            seen_output_paths: set[Path] = set()
+            base_points = points
+            base_cells = cells
+            base_parent_cell_index = parent_cell_index
+            for time_index in time_indices:
+                for level_index in level_indices:
+                    step_start = time.perf_counter()
+                    values, units, title, used_time_index, used_level_index = read_field(
+                        data_path,
+                        args.variable,
+                        time_index,
+                        level_index,
+                        expected_ncells=cell_mask.size,
+                    )
+                    log_message(
+                        f"Field {args.variable}: {values.size} values for "
+                        f"time-index={time_index}, level-index={level_index} "
+                        f"({format_duration(time.perf_counter() - step_start)})"
+                    )
+                    step_start = time.perf_counter()
+                    current_points = base_points
+                    current_cells = base_cells
+                    current_values = values[cell_mask]
+                    applied_coarsen_level = 0
+                    if args.coarsen_level > 0:
+                        current_points, current_cells, current_values, applied_coarsen_level = coarsen_mesh(
+                            current_points,
+                            current_cells,
+                            current_values,
+                            base_parent_cell_index,
+                            args.coarsen_level,
+                        )
+                    current_points, current_cells = project_mesh(
+                        current_points,
+                        current_cells,
+                        args.projection,
+                        radius,
+                        args.field_radius_offset,
+                        args.plate_carree_seam_mode,
+                    )
+                    stats = summarize_values(current_values)
+                    current_output_path = build_output_path(
+                        output_path,
+                        time_index if used_time_index else None,
+                        level_index if used_level_index else None,
+                        is_batch,
+                    )
+                    if current_output_path in seen_output_paths:
+                        raise ValueError(
+                            "Requested multiple indices for a dimension that is not "
+                            f"used by variable {args.variable!r}; output path collision "
+                            f"at {current_output_path}"
+                        )
+                    seen_output_paths.add(current_output_path)
+                    log_message(
+                        f"Processed: {current_cells.shape[0]} output cells for "
+                        f"{current_output_path} "
+                        f"({format_duration(time.perf_counter() - step_start)})"
+                    )
+                    step_start = time.perf_counter()
+                    write_legacy_vtk(
+                        current_output_path,
+                        current_points,
+                        current_cells,
+                        current_values,
+                        args.variable,
+                        title,
+                        units,
+                        args.vtk_format,
+                    )
+                    log_message(
+                        f"Field output: {current_output_path} "
+                        f"({format_duration(time.perf_counter() - step_start)})"
+                    )
+                    field_exports.append(
+                        {
+                            "output_path": current_output_path,
+                            "cells": current_cells.shape[0],
+                            "time_index": time_index if used_time_index else None,
+                            "level_index": level_index if used_level_index else None,
+                            "stats": stats,
+                            "applied_coarsen_level": applied_coarsen_level,
+                        }
+                    )
         coastline_count = None
         coastline_path = None
         graticule_count = None
@@ -1637,21 +1722,49 @@ def main() -> int:
         return 1
 
     if wants_field_export:
-        print(f"Wrote {output_path} with {cells.shape[0]} cells and variable {args.variable}")
+        for export in field_exports:
+            index_parts = []
+            if export["time_index"] is not None:
+                index_parts.append(f"time-index={export['time_index']}")
+            if export["level_index"] is not None:
+                index_parts.append(f"level-index={export['level_index']}")
+            index_text = f" ({', '.join(index_parts)})" if index_parts else ""
+            print(
+                f"Wrote {export['output_path']} with {export['cells']} cells "
+                f"and variable {args.variable}{index_text}"
+            )
     if args.projection != "sphere" or not wants_field_export:
         print(f"Projection: {args.projection}")
     if args.projection == "plate-carree":
         print(f"Plate-carree seam mode: {args.plate_carree_seam_mode}")
     if wants_field_export and args.coarsen_level != 0:
-        print(f"Coarsen level: requested={args.coarsen_level} applied={applied_coarsen_level}")
+        for export in field_exports:
+            index_parts = []
+            if export["time_index"] is not None:
+                index_parts.append(f"time-index={export['time_index']}")
+            if export["level_index"] is not None:
+                index_parts.append(f"level-index={export['level_index']}")
+            index_text = f" ({', '.join(index_parts)})" if index_parts else ""
+            print(
+                f"Coarsen level{index_text}: requested={args.coarsen_level} "
+                f"applied={export['applied_coarsen_level']}"
+            )
     if wants_field_export and args.field_radius_offset != 0.0:
         print(f"Field radius offset: {args.field_radius_offset:.16g}")
-    if stats is not None:
-        print(
-            "Field stats: "
-            f"count={stats['count']} finite={stats['finite_count']} nan={stats['nan_count']} "
-            f"min={stats['min']:.16g} max={stats['max']:.16g} mean={stats['mean']:.16g}"
-        )
+    if field_exports:
+        for export in field_exports:
+            stats = export["stats"]
+            index_parts = []
+            if export["time_index"] is not None:
+                index_parts.append(f"time-index={export['time_index']}")
+            if export["level_index"] is not None:
+                index_parts.append(f"level-index={export['level_index']}")
+            index_text = f" ({', '.join(index_parts)})" if index_parts else ""
+            print(
+                f"Field stats{index_text}: "
+                f"count={stats['count']} finite={stats['finite_count']} nan={stats['nan_count']} "
+                f"min={stats['min']:.16g} max={stats['max']:.16g} mean={stats['mean']:.16g}"
+            )
     elif wants_overlay:
         print(f"Radius: {radius:.16g}")
     if coastline_path is not None and coastline_count is not None:

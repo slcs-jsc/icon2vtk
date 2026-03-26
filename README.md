@@ -2,17 +2,15 @@
 
 This project provides a Python script, `icon2vtk.py`, that converts cell-based ICON model output from netCDF into legacy VTK files that can be opened directly in ParaView.
 
-The tool started as a simple converter for one 2-D field on the ICON grid, but it now supports a broader workflow that is useful for exploratory visualization:
+The script supports a broader workflow for exploratory visualization:
 
-- export 2-D and 3-D ICON cell fields
-- select one time index and one vertical level
-- coarsen the exported field by one or more ICON refinement levels using parent-child metadata
-- write legacy VTK in either ASCII or binary format
-- add coastline overlays from Cartopy / Natural Earth
-- add longitude-latitude graticules
-- subset the exported domain by a bounding box or a circular region
-- lift fields and overlays above the sphere with configurable radius offsets
-- print basic statistics for the exported field slice
+- export one or more 2-D ICON cell fields by selecting time and level indices
+- subset the domain by a bounding box or circular region
+- coarsen the mesh by one or more ICON refinement levels using parent-child metadata
+- apply configurable radius offsets to fields and overlays
+- write legacy VTK in ASCII or binary format
+- add coastline and longitude-latitude graticule overlays
+- print basic statistics for each exported field slice
 
 The main script is:
 
@@ -29,8 +27,8 @@ The script combines both:
 
 1. It reads the ICON mesh from the grid file.
 2. It reads one selected variable from the netCDF data file.
-3. It extracts a single slice if the variable depends on time or vertical level.
-4. It writes a legacy VTK file that ParaView can display as an unstructured surface on the sphere.
+3. It resolves that variable to one or more 2-D slices by selecting time and level indices when needed.
+4. It writes one or more legacy VTK files that ParaView can display as unstructured surfaces, either on the sphere or in `plate-carree` projection.
 
 Optionally, it can also write additional VTK polyline files containing:
 
@@ -179,6 +177,24 @@ python3 icon2vtk.py \
 ```
 
 This reads the variable `ts` from the ICON netCDF data file, uses the ICON grid from the grid file, and writes `ts.vtk` in binary VTK format by default when you run the command from the repository root.
+
+`--time-index` and `--level-index` accept either a single index or a comma-separated list of indices. When you pass multiple indices, the script exports one VTK file per selected slice combination and appends suffixes such as `_t0`, `_t1`, `_l45`, or `_t1_l45` to the output filename.
+
+For example, to export two timesteps of a 2-D field:
+
+```bash
+python3 icon2vtk.py \
+  example/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
+  example/icon_grid_0049_R02B04_G.nc \
+  ts \
+  --time-index 0,1 \
+  -o example/ts_batch.vtk
+```
+
+This writes:
+
+- `example/ts_batch_t0.vtk`
+- `example/ts_batch_t1.vtk`
 
 If the grid file provides the ICON variable `parent_cell_index`, you can coarsen the exported field by one or more refinement levels:
 
