@@ -201,6 +201,14 @@ python3 icon2vtk.py \
 
 This groups complete four-child sibling families using `parent_cell_index`, reconstructs the parent triangle, and writes the average of the sibling values onto that coarser cell. Higher values such as `--coarsen-level 2` or `3` request repeated collapse of the same 4:1 refinement pattern.
 
+Coarsening is applied on the full global ICON mesh first. If you also request
+`--bbox` or `--circle`, that regional filtering is applied afterward on the
+already coarsened mesh using the coarse cell centers.
+
+Conceptually, each coarsening step replaces every complete four-child family by
+its parent face, carries the mean of the four child values onto that parent,
+and then repeats the same process on the next coarser mesh level.
+
 Important details:
 
 - `--coarsen-level` requires `parent_cell_index` in the grid file; otherwise the script exits with an error

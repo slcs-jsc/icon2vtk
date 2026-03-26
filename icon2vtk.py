@@ -375,6 +375,38 @@ def subset_mesh(
     return subset_points, subset_cells
 
 
+def cell_center_lonlat(points: np.ndarray, cells: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Compute lon/lat cell centers from the current triangle geometry."""
+    centroids = np.mean(points[cells], axis=1)
+    return xyz_to_lonlat(centroids)
+
+
+def subset_field_mesh(
+    points: np.ndarray,
+    cells: np.ndarray,
+    values: np.ndarray,
+    radius: float,
+    bbox: tuple[float, float, float, float] | None = None,
+    circle: tuple[float, float, float] | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Subset an already-built field mesh by coarse cell-center lon/lat."""
+    if bbox is not None and circle is not None:
+        raise ValueError("Use either --bbox or --circle, not both")
+    if bbox is None and circle is None:
+        return points, cells, values
+
+    lon_deg, lat_deg = cell_center_lonlat(points, cells)
+    if bbox is not None:
+        cell_mask = bbox_contains(lon_deg, lat_deg, bbox)
+        region_description = "requested bounding box"
+    else:
+        cell_mask = circle_contains(lon_deg, lat_deg, circle, radius)
+        region_description = "requested circle"
+
+    subset_points, subset_cells = subset_mesh(points, cells, cell_mask, region_description)
+    return subset_points, subset_cells, values[cell_mask]
+
+
 def compact_cells(points: np.ndarray, cells: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Remove unused vertices after topology-changing operations such as coarsening."""
     if cells.size == 0:
@@ -580,10 +612,8 @@ def coarsen_mesh(
 def read_mesh(
     grid_path: Path,
     radius_override: float | None,
-    bbox: tuple[float, float, float, float] | None = None,
-    circle: tuple[float, float, float] | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
-    """Read the ICON triangular mesh and optional region-selection metadata."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+    """Read the full ICON triangular mesh and optional coarsening metadata."""
     with Dataset(grid_path) as ds:
         required = [
             "vertex_of_cell",
@@ -622,34 +652,7 @@ def read_mesh(
                 raise ValueError(
                     "Expected parent_cell_index to have one entry per ICON cell"
                 )
-
-        if bbox is not None and circle is not None:
-            raise ValueError("Use either --bbox or --circle, not both")
-
-        if bbox is None and circle is None:
-            cell_mask = np.ones(cells.shape[0], dtype=bool)
-        else:
-            if "clon" not in ds.variables or "clat" not in ds.variables:
-                raise ValueError("Grid file is missing clon/clat needed for region selection")
-            # Region selection uses cell centers rather than polygon overlap
-            # tests. This keeps the selection logic simple and predictable.
-            clon = np.rad2deg(np.asarray(ds.variables["clon"][:], dtype=np.float64))
-            clat = np.rad2deg(np.asarray(ds.variables["clat"][:], dtype=np.float64))
-            if bbox is not None:
-                cell_mask = bbox_contains(clon, clat, bbox)
-            else:
-                cell_mask = circle_contains(clon, clat, circle, radius)
-
-    if bbox is not None or circle is not None:
-        if bbox is not None:
-            region_description = "requested bounding box"
-        else:
-            region_description = "requested circle"
-        points, cells = subset_mesh(points, cells, cell_mask, region_description)
-        if parent_cell_index is not None:
-            parent_cell_index = parent_cell_index[cell_mask]
-
-    return points, cells, cell_mask, parent_cell_index
+    return points, cells, parent_cell_index
 
 
 def resolve_radius(radius_override: float | None) -> float:
@@ -1571,12 +1574,7 @@ def main() -> int:
                 f"({format_duration(time.perf_counter() - step_start)})"
             )
             step_start = time.perf_counter()
-            points, cells, cell_mask, parent_cell_index = read_mesh(
-                grid_path,
-                radius,
-                bbox=bbox,
-                circle=circle,
-            )
+            points, cells, parent_cell_index = read_mesh(grid_path, radius)
             log_message(
                 f"Mesh: {cells.shape[0]} cells, {points.shape[0]} points "
                 f"({format_duration(time.perf_counter() - step_start)})"
@@ -1594,7 +1592,7 @@ def main() -> int:
                         args.variable,
                         time_index,
                         level_index,
-                        expected_ncells=cell_mask.size,
+                        expected_ncells=base_cells.shape[0],
                     )
                     log_message(
                         f"Field {args.variable}: {values.size} values for "
@@ -1604,7 +1602,7 @@ def main() -> int:
                     step_start = time.perf_counter()
                     current_points = base_points
                     current_cells = base_cells
-                    current_values = values[cell_mask]
+                    current_values = values
                     applied_coarsen_level = 0
                     if args.coarsen_level > 0:
                         current_points, current_cells, current_values, applied_coarsen_level = coarsen_mesh(
@@ -1614,6 +1612,14 @@ def main() -> int:
                             base_parent_cell_index,
                             args.coarsen_level,
                         )
+                    current_points, current_cells, current_values = subset_field_mesh(
+                        current_points,
+                        current_cells,
+                        current_values,
+                        radius,
+                        bbox=bbox,
+                        circle=circle,
+                    )
                     current_points, current_cells = project_mesh(
                         current_points,
                         current_cells,
