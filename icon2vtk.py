@@ -53,7 +53,7 @@ def parse_args() -> argparse.Namespace:
         description=(
             "Read ICON netCDF data and grid information to write VTK for "
             "ParaView, or generate coastline/graticule overlays on their own."
-        )
+        ),
     )
     parser.add_argument(
         "data_file",
@@ -275,7 +275,9 @@ def build_output_path(
     )
 
 
-def bbox_contains(lon_deg: np.ndarray, lat_deg: np.ndarray, bbox: tuple[float, float, float, float]) -> np.ndarray:
+def bbox_contains(
+    lon_deg: np.ndarray, lat_deg: np.ndarray, bbox: tuple[float, float, float, float]
+) -> np.ndarray:
     """Return a boolean mask for points whose lon/lat fall inside a bbox.
 
     The bbox may cross the dateline. In that case ``lon_min > lon_max`` and the
@@ -375,7 +377,9 @@ def subset_mesh(
     return subset_points, subset_cells
 
 
-def cell_center_lonlat(points: np.ndarray, cells: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def cell_center_lonlat(
+    points: np.ndarray, cells: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
     """Compute lon/lat cell centers from the current triangle geometry."""
     centroids = np.mean(points[cells], axis=1)
     return xyz_to_lonlat(centroids)
@@ -403,11 +407,15 @@ def subset_field_mesh(
         cell_mask = circle_contains(lon_deg, lat_deg, circle, radius)
         region_description = "requested circle"
 
-    subset_points, subset_cells = subset_mesh(points, cells, cell_mask, region_description)
+    subset_points, subset_cells = subset_mesh(
+        points, cells, cell_mask, region_description
+    )
     return subset_points, subset_cells, values[cell_mask]
 
 
-def compact_cells(points: np.ndarray, cells: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def compact_cells(
+    points: np.ndarray, cells: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
     """Remove unused vertices after topology-changing operations such as coarsening."""
     if cells.size == 0:
         raise ValueError("No ICON cells remain after coarsening")
@@ -455,7 +463,9 @@ def order_triangle_vertices(points: np.ndarray, vertex_ids: np.ndarray) -> np.nd
 
     ordered_points = points[ordered]
     orientation = np.dot(
-        np.cross(ordered_points[1] - ordered_points[0], ordered_points[2] - ordered_points[0]),
+        np.cross(
+            ordered_points[1] - ordered_points[0], ordered_points[2] - ordered_points[0]
+        ),
         centroid,
     )
     if orientation < 0.0:
@@ -514,9 +524,13 @@ def coarsen_one_level(
         if parent_vertices.size != 3:
             continue
 
-        ordered_vertices = order_triangle_vertices(points, parent_vertices.astype(np.int64))
+        ordered_vertices = order_triangle_vertices(
+            points, parent_vertices.astype(np.int64)
+        )
         coarsened_cells.append(ordered_vertices)
-        coarsened_values.append(average_values(values[np.asarray(sibling_indices, dtype=np.int64)]))
+        coarsened_values.append(
+            average_values(values[np.asarray(sibling_indices, dtype=np.int64)])
+        )
         coarsened_ids.append(int(parent_ids[sibling_indices[0]]))
         coarsened_levels.append(candidate_level + 1)
         keep_child_mask[np.asarray(sibling_indices, dtype=np.int64)] = False
@@ -528,11 +542,15 @@ def coarsen_one_level(
     remaining_levels = cell_levels[keep_child_mask]
 
     if coarsened_cells:
-        combined_cells = np.vstack((remaining_cells, np.asarray(coarsened_cells, dtype=np.int64)))
+        combined_cells = np.vstack(
+            (remaining_cells, np.asarray(coarsened_cells, dtype=np.int64))
+        )
         combined_values = np.concatenate(
             (remaining_values, np.asarray(coarsened_values, dtype=np.float64))
         )
-        combined_ids = np.concatenate((remaining_ids, np.asarray(coarsened_ids, dtype=np.int64)))
+        combined_ids = np.concatenate(
+            (remaining_ids, np.asarray(coarsened_ids, dtype=np.int64))
+        )
         combined_levels = np.concatenate(
             (remaining_levels, np.asarray(coarsened_levels, dtype=np.int64))
         )
@@ -623,15 +641,26 @@ def read_mesh(
         ]
         missing = [name for name in required if name not in ds.variables]
         if missing:
-            raise ValueError(f"Grid file is missing required variables: {', '.join(missing)}")
+            raise ValueError(
+                f"Grid file is missing required variables: {', '.join(missing)}"
+            )
 
         radius = radius_override
         if radius is None:
             radius = DEFAULT_EARTH_RADIUS_M
 
-        x = np.asarray(ds.variables["cartesian_x_vertices"][:], dtype=np.float64) * radius
-        y = np.asarray(ds.variables["cartesian_y_vertices"][:], dtype=np.float64) * radius
-        z = np.asarray(ds.variables["cartesian_z_vertices"][:], dtype=np.float64) * radius
+        x = (
+            np.asarray(ds.variables["cartesian_x_vertices"][:], dtype=np.float64)
+            * radius
+        )
+        y = (
+            np.asarray(ds.variables["cartesian_y_vertices"][:], dtype=np.float64)
+            * radius
+        )
+        z = (
+            np.asarray(ds.variables["cartesian_z_vertices"][:], dtype=np.float64)
+            * radius
+        )
         points = np.column_stack((x, y, z))
 
         connectivity = np.asarray(ds.variables["vertex_of_cell"][:], dtype=np.int64)
@@ -647,7 +676,9 @@ def read_mesh(
             raise ValueError("vertex_of_cell appears not to be 1-based as expected")
         parent_cell_index = None
         if "parent_cell_index" in ds.variables:
-            parent_cell_index = np.asarray(ds.variables["parent_cell_index"][:], dtype=np.int64)
+            parent_cell_index = np.asarray(
+                ds.variables["parent_cell_index"][:], dtype=np.int64
+            )
             if parent_cell_index.shape != (cells.shape[0],):
                 raise ValueError(
                     "Expected parent_cell_index to have one entry per ICON cell"
@@ -689,7 +720,9 @@ def read_field(
     with Dataset(data_path) as ds:
         if variable_name not in ds.variables:
             available = ", ".join(ds.variables.keys())
-            raise ValueError(f"Variable {variable_name!r} not found. Available variables: {available}")
+            raise ValueError(
+                f"Variable {variable_name!r} not found. Available variables: {available}"
+            )
 
         var = ds.variables[variable_name]
         dims = var.dimensions
@@ -702,7 +735,11 @@ def read_field(
         selection: list[int | slice] = []
         used_level_index = False
         used_time_index = False
-        non_singleton_extra_dims = [dim_name for dim_name, dim_size in zip(dims, shape) if dim_name not in {"time", "ncells"} and dim_size > 1]
+        non_singleton_extra_dims = [
+            dim_name
+            for dim_name, dim_size in zip(dims, shape)
+            if dim_name not in {"time", "ncells"} and dim_size > 1
+        ]
         if len(non_singleton_extra_dims) > 1:
             raise ValueError(
                 f"Variable {variable_name!r} has multiple non-singleton non-cell dimensions "
@@ -818,7 +855,9 @@ def format_indexed_value_sequence(
     return indexed_values[:head_count] + ["..."] + indexed_values[-tail_count:]
 
 
-def read_dimension_values(ds: Dataset, dim_name: str) -> tuple[list[object], str | None] | None:
+def read_dimension_values(
+    ds: Dataset, dim_name: str
+) -> tuple[list[object], str | None] | None:
     """Return formatted coordinate values for a 1-D dimension variable when available."""
     if dim_name not in ds.variables:
         return None
@@ -835,7 +874,9 @@ def read_dimension_values(ds: Dataset, dim_name: str) -> tuple[list[object], str
         converted = num2date(values, units=units, calendar=calendar)
         return list(np.asarray(converted, dtype=object).reshape(-1)), units
 
-    return [value.item() if isinstance(value, np.generic) else value for value in values], units
+    return [
+        value.item() if isinstance(value, np.generic) else value for value in values
+    ], units
 
 
 def is_summary_coordinate(coord_var, dim_name: str) -> bool:
@@ -864,7 +905,9 @@ def collect_coordinate_summaries(ds: Dataset) -> list[list[str]]:
             continue
         values, units = dimension_values
         coord_var = ds.variables[dim_name]
-        display_units = not (getattr(coord_var, "standard_name", None) == "time" or dim_name == "time")
+        display_units = not (
+            getattr(coord_var, "standard_name", None) == "time" or dim_name == "time"
+        )
         coordinate_parts.append(
             format_indexed_value_sequence(dim_name, values, units, display_units)
         )
@@ -991,7 +1034,9 @@ def write_legacy_vtk(
         write_header(fh, header, "UNSTRUCTURED_GRID", vtk_format)
 
         fh.write(f"POINTS {npoints} double\n".encode("ascii"))
-        write_numeric_array(fh, np.asarray(points, dtype=np.float64), vtk_format, "double")
+        write_numeric_array(
+            fh, np.asarray(points, dtype=np.float64), vtk_format, "double"
+        )
 
         fh.write(f"CELLS {ncells} {ncells * 4}\n".encode("ascii"))
         # Legacy VTK ``CELLS`` encodes each cell as ``npts id0 id1 id2 ...``.
@@ -1010,18 +1055,15 @@ def write_legacy_vtk(
         fh.write(f"CELL_DATA {ncells}\n".encode("ascii"))
         fh.write(f"SCALARS {sanitize_name(variable_name)} double 1\n".encode("ascii"))
         fh.write(b"LOOKUP_TABLE default\n")
-        write_numeric_array(fh, np.asarray(values, dtype=np.float64), vtk_format, "double")
+        write_numeric_array(
+            fh, np.asarray(values, dtype=np.float64), vtk_format, "double"
+        )
 
 
 def sanitize_name(name: str) -> str:
     """Map arbitrary variable names to VTK-safe scalar array names."""
     cleaned = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in name)
     return cleaned or "field"
-
-
-def default_coastline_path(output_path: Path) -> Path:
-    """Return the default companion path for coastline output."""
-    return output_path.with_name(f"{output_path.stem}_coastlines.vtk")
 
 
 def xyz_to_lonlat(points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -1039,7 +1081,9 @@ def xyz_to_lonlat(points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return lon_deg, lat_deg
 
 
-def lonlat_to_xyz(lon_deg: np.ndarray, lat_deg: np.ndarray, radius: float) -> np.ndarray:
+def lonlat_to_xyz(
+    lon_deg: np.ndarray, lat_deg: np.ndarray, radius: float
+) -> np.ndarray:
     """Convert lon/lat degrees to Cartesian coordinates on a sphere."""
     lon = np.deg2rad(lon_deg)
     lat = np.deg2rad(lat_deg)
@@ -1068,7 +1112,9 @@ def project_lonlat(
     raise ValueError(f"Unsupported projection {projection!r}")
 
 
-def project_xyz(points: np.ndarray, projection: str, radius: float, offset: float = 0.0) -> np.ndarray:
+def project_xyz(
+    points: np.ndarray, projection: str, radius: float, offset: float = 0.0
+) -> np.ndarray:
     """Project existing mesh vertices while preserving their current topology."""
     if projection == "sphere":
         if offset == 0.0:
@@ -1079,26 +1125,6 @@ def project_xyz(points: np.ndarray, projection: str, radius: float, offset: floa
         return points * scale
     lon_deg, lat_deg = xyz_to_lonlat(points)
     return project_lonlat(lon_deg, lat_deg, projection, radius, offset)
-
-
-def unwrap_longitudes_for_cell(lon_deg: np.ndarray, lat_deg: np.ndarray) -> np.ndarray:
-    """Make one cell's vertex longitudes locally continuous across the dateline.
-
-    Without this step a triangle straddling +/-180 degrees would appear to span
-    almost the full width of the map in ``plate-carree`` coordinates.
-    """
-    non_polar_mask = np.abs(lat_deg) < 89.999999
-    if np.any(non_polar_mask):
-        reference_lon = float(lon_deg[np.flatnonzero(non_polar_mask)[0]])
-    else:
-        reference_lon = float(lon_deg[0])
-
-    adjusted_lon = reference_lon + ((lon_deg - reference_lon + 180.0) % 360.0) - 180.0
-    polar_mask = ~non_polar_mask
-    if np.any(polar_mask) and np.any(non_polar_mask):
-        adjusted_lon = adjusted_lon.copy()
-        adjusted_lon[polar_mask] = float(np.mean(adjusted_lon[non_polar_mask]))
-    return adjusted_lon
 
 
 def wrap_longitudes_to_primary_range(lon_deg: np.ndarray) -> np.ndarray:
@@ -1175,7 +1201,11 @@ def project_mesh(
     non_polar_mask = np.abs(cell_lat) < 89.999999
     has_non_polar = np.any(non_polar_mask, axis=1)
     reference_index = np.argmax(non_polar_mask, axis=1)
-    reference_lon = np.where(has_non_polar, cell_lon[np.arange(cells.shape[0]), reference_index], cell_lon[:, 0])
+    reference_lon = np.where(
+        has_non_polar,
+        cell_lon[np.arange(cells.shape[0]), reference_index],
+        cell_lon[:, 0],
+    )
 
     adjusted_lon = (
         reference_lon[:, np.newaxis]
@@ -1200,7 +1230,9 @@ def project_mesh(
         )
 
     center_lon = np.mean(adjusted_lon, axis=1)
-    wrapped_lon = adjusted_lon - 360.0 * np.floor((center_lon + 180.0) / 360.0)[:, np.newaxis]
+    wrapped_lon = (
+        adjusted_lon - 360.0 * np.floor((center_lon + 180.0) / 360.0)[:, np.newaxis]
+    )
     wrapped_mean_lon = np.mean(wrapped_lon, axis=1)
     wrapped_lon = np.where(
         (wrapped_mean_lon > 180.0)[:, np.newaxis],
@@ -1227,7 +1259,9 @@ def project_mesh(
         radius,
         offset,
     )
-    projected_cells = np.arange(cells.shape[0] * cells.shape[1], dtype=np.int64).reshape(cells.shape)
+    projected_cells = np.arange(
+        cells.shape[0] * cells.shape[1], dtype=np.int64
+    ).reshape(cells.shape)
     return projected_points, projected_cells
 
 
@@ -1291,7 +1325,10 @@ def write_coastline_vtk(
             bbox_geom = box(lon_min, lat_min, lon_max, lat_max)
         else:
             bbox_geom = GeometryCollection(
-                [box(lon_min, lat_min, 180.0, lat_max), box(-180.0, lat_min, lon_max, lat_max)]
+                [
+                    box(lon_min, lat_min, 180.0, lat_max),
+                    box(-180.0, lat_min, lon_max, lat_max),
+                ]
             )
     elif circle is not None:
         lon_min, lat_min, lon_max, lat_max = circle_to_bbox(circle, radius)
@@ -1299,7 +1336,10 @@ def write_coastline_vtk(
             bbox_geom = box(lon_min, lat_min, lon_max, lat_max)
         else:
             bbox_geom = GeometryCollection(
-                [box(lon_min, lat_min, 180.0, lat_max), box(-180.0, lat_min, lon_max, lat_max)]
+                [
+                    box(lon_min, lat_min, 180.0, lat_max),
+                    box(-180.0, lat_min, lon_max, lat_max),
+                ]
             )
 
     all_points: list[np.ndarray] = []
@@ -1318,7 +1358,9 @@ def write_coastline_vtk(
                 # Segments that fall outside are split into shorter visible runs.
                 point_mask = circle_contains(coords[:, 0], coords[:, 1], circle, radius)
                 filtered_segments = [
-                    coords[group] for group in split_true_runs(point_mask) if group.size >= 2
+                    coords[group]
+                    for group in split_true_runs(point_mask)
+                    if group.size >= 2
                 ]
                 if not filtered_segments:
                     continue
@@ -1341,9 +1383,13 @@ def write_coastline_vtk(
 
     points = np.vstack(all_points)
     with output_path.open("wb") as fh:
-        write_header(fh, f"Natural Earth coastlines [{resolution}]", "POLYDATA", vtk_format)
+        write_header(
+            fh, f"Natural Earth coastlines [{resolution}]", "POLYDATA", vtk_format
+        )
         fh.write(f"POINTS {points.shape[0]} double\n".encode("ascii"))
-        write_numeric_array(fh, np.asarray(points, dtype=np.float64), vtk_format, "double")
+        write_numeric_array(
+            fh, np.asarray(points, dtype=np.float64), vtk_format, "double"
+        )
         total_size = sum(length + 1 for length in line_lengths)
         fh.write(f"LINES {len(line_lengths)} {total_size}\n".encode("ascii"))
         line_rows = []
@@ -1394,7 +1440,9 @@ def write_graticule_vtk(
     """Write longitude and latitude guide lines as VTK ``POLYDATA``."""
     dlon, dlat = spacing
     if dlon <= 0.0 or dlat <= 0.0:
-        raise ValueError("Graticule spacing must be positive in both longitude and latitude")
+        raise ValueError(
+            "Graticule spacing must be positive in both longitude and latitude"
+        )
 
     if bbox is not None and circle is not None:
         raise ValueError("Use either --bbox or --circle, not both")
@@ -1488,9 +1536,16 @@ def write_graticule_vtk(
 
     points = np.vstack(all_points)
     with output_path.open("wb") as fh:
-        write_header(fh, f"Longitude-latitude graticule [{dlon} x {dlat} deg]", "POLYDATA", vtk_format)
+        write_header(
+            fh,
+            f"Longitude-latitude graticule [{dlon} x {dlat} deg]",
+            "POLYDATA",
+            vtk_format,
+        )
         fh.write(f"POINTS {points.shape[0]} double\n".encode("ascii"))
-        write_numeric_array(fh, np.asarray(points, dtype=np.float64), vtk_format, "double")
+        write_numeric_array(
+            fh, np.asarray(points, dtype=np.float64), vtk_format, "double"
+        )
         total_size = sum(length + 1 for length in line_lengths)
         fh.write(f"LINES {len(line_lengths)} {total_size}\n".encode("ascii"))
         line_rows = []
@@ -1533,9 +1588,16 @@ def main() -> int:
         return 0
 
     wants_field_export = args.variable is not None or args.output is not None
-    wants_overlay = args.coastline_output is not None or args.graticule_output is not None
-    if wants_field_export and (data_path is None or args.grid_file is None or args.variable is None):
-        print("Error: data_file, grid_file, and variable are required for field export", file=sys.stderr)
+    wants_overlay = (
+        args.coastline_output is not None or args.graticule_output is not None
+    )
+    if wants_field_export and (
+        data_path is None or args.grid_file is None or args.variable is None
+    ):
+        print(
+            "Error: data_file, grid_file, and variable are required for field export",
+            file=sys.stderr,
+        )
         return 1
     if not wants_field_export and not wants_overlay:
         print(
@@ -1558,12 +1620,7 @@ def main() -> int:
         level_indices = parse_index_list(args.level_index, "--level-index")
         if args.coarsen_level < 0:
             raise ValueError("Coarsen level must be non-negative")
-        step_start = time.perf_counter()
         radius = resolve_radius(args.radius)
-        log_message(
-            f"Using radius: {radius:.16g} m "
-            f"({format_duration(time.perf_counter() - step_start)})"
-        )
         cells = None
         field_exports: list[dict[str, object]] = []
         if wants_field_export:
@@ -1587,12 +1644,14 @@ def main() -> int:
             for time_index in time_indices:
                 for level_index in level_indices:
                     step_start = time.perf_counter()
-                    values, units, title, used_time_index, used_level_index = read_field(
-                        data_path,
-                        args.variable,
-                        time_index,
-                        level_index,
-                        expected_ncells=base_cells.shape[0],
+                    values, units, title, used_time_index, used_level_index = (
+                        read_field(
+                            data_path,
+                            args.variable,
+                            time_index,
+                            level_index,
+                            expected_ncells=base_cells.shape[0],
+                        )
                     )
                     log_message(
                         f"Field {args.variable}: {values.size} values for "
@@ -1605,7 +1664,12 @@ def main() -> int:
                     current_values = values
                     applied_coarsen_level = 0
                     if args.coarsen_level > 0:
-                        current_points, current_cells, current_values, applied_coarsen_level = coarsen_mesh(
+                        (
+                            current_points,
+                            current_cells,
+                            current_values,
+                            applied_coarsen_level,
+                        ) = coarsen_mesh(
                             current_points,
                             current_cells,
                             current_values,

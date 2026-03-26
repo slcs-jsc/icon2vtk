@@ -21,7 +21,7 @@ python3 ../icon2vtk.py \
 
 echo
 echo "[2/2] Plate-carree example"
-echo "2-D field, flat map projection, clipped seam handling, regional subset, with overlays."
+echo "2-D field, flat map projection, clipped seam handling, with overlays."
 python3 ../icon2vtk.py \
   aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
   icon_grid_0049_R02B04_G.nc \
