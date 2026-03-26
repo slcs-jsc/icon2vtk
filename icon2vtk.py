@@ -664,7 +664,7 @@ def read_field(
             )
 
         selection: list[int | slice] = []
-        used_extra_dim = False
+        used_level_index = False
         non_singleton_extra_dims = [dim_name for dim_name, dim_size in zip(dims, shape) if dim_name not in {"time", "ncells"} and dim_size > 1]
         if len(non_singleton_extra_dims) > 1:
             raise ValueError(
@@ -692,7 +692,8 @@ def read_field(
                         f"{dim_name!r} of size {dim_size}"
                     )
                 selection.append(idx)
-                used_extra_dim = True
+                if dim_size > 1:
+                    used_level_index = True
 
         data = np.ma.asarray(var[tuple(selection)])
         values = np.ma.filled(data, np.nan).astype(np.float64, copy=False)
@@ -705,7 +706,7 @@ def read_field(
 
         units = getattr(var, "units", None)
         long_name = getattr(var, "long_name", variable_name)
-        if used_extra_dim:
+        if used_level_index:
             long_name = f"{long_name} (level-index={level_index})"
         return values, units, long_name
 
