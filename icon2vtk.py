@@ -1256,6 +1256,12 @@ def write_graticule_vtk(
 
     lat_values = build_axis_values(dlat, -90.0, 90.0)
     lon_values = build_axis_values(dlon, -180.0, 180.0)
+    if bbox is not None:
+        lat_values = [lat for lat in lat_values if lat_min <= lat <= lat_max]
+        if lon_min <= lon_max:
+            lon_values = [lon for lon in lon_values if lon_min <= lon <= lon_max]
+        else:
+            lon_values = [lon for lon in lon_values if lon >= lon_min or lon <= lon_max]
 
     all_points: list[np.ndarray] = []
     line_lengths: list[int] = []
