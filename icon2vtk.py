@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import math
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -715,6 +716,18 @@ def format_shape(shape: tuple[int, ...]) -> str:
     return "(" + ", ".join(str(v) for v in shape) + ")"
 
 
+def format_duration(seconds: float) -> str:
+    """Format a short wall-clock duration for user-facing logs."""
+    if seconds < 1.0:
+        return f"{seconds * 1000.0:.1f} ms"
+    return f"{seconds:.3f} s"
+
+
+def log_message(message: str) -> None:
+    """Print a concise progress message."""
+    print(message)
+
+
 def list_variables(data_path: Path) -> None:
     """Print a compact overview of variables contained in the data file."""
     with Dataset(data_path) as ds:
@@ -1320,6 +1333,7 @@ def write_graticule_vtk(
 
 def main() -> int:
     """Command-line entry point."""
+    total_start = time.perf_counter()
     args = parse_args()
     data_path = Path(args.data_file) if args.data_file is not None else None
     if args.list_variables:
@@ -1327,7 +1341,12 @@ def main() -> int:
             print("Error: data_file is required with --list-variables", file=sys.stderr)
             return 1
         try:
+            step_start = time.perf_counter()
             list_variables(data_path)
+            log_message(
+                f"Listed variables from {data_path} in "
+                f"{format_duration(time.perf_counter() - step_start)}"
+            )
         except Exception as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
@@ -1357,17 +1376,25 @@ def main() -> int:
     try:
         if args.coarsen_level < 0:
             raise ValueError("Coarsen level must be non-negative")
+        step_start = time.perf_counter()
         radius = resolve_radius(grid_path, args.radius)
+        log_message(f"Radius {radius:.16g} ({format_duration(time.perf_counter() - step_start)})")
         cells = None
         stats = None
         applied_coarsen_level = 0
         if wants_field_export:
+            step_start = time.perf_counter()
             points, cells, cell_mask, parent_cell_index = read_mesh(
                 grid_path,
                 radius,
                 bbox=bbox,
                 circle=circle,
             )
+            log_message(
+                f"Mesh: {cells.shape[0]} cells, {points.shape[0]} points "
+                f"({format_duration(time.perf_counter() - step_start)})"
+            )
+            step_start = time.perf_counter()
             values, units, title = read_field(
                 data_path,
                 args.variable,
@@ -1375,6 +1402,11 @@ def main() -> int:
                 args.level_index,
                 expected_ncells=cell_mask.size,
             )
+            log_message(
+                f"Field {args.variable}: {values.size} values "
+                f"({format_duration(time.perf_counter() - step_start)})"
+            )
+            step_start = time.perf_counter()
             # The field is read against the full original ``ncells`` dimension and
             # then subset to the same cell mask as the mesh so both stay aligned.
             values = values[cell_mask]
@@ -1395,6 +1427,11 @@ def main() -> int:
                 args.plate_carree_seam_mode,
             )
             stats = summarize_values(values)
+            log_message(
+                f"Processed: {cells.shape[0]} output cells "
+                f"({format_duration(time.perf_counter() - step_start)})"
+            )
+            step_start = time.perf_counter()
             write_legacy_vtk(
                 output_path,
                 points,
@@ -1405,12 +1442,17 @@ def main() -> int:
                 units,
                 args.vtk_format,
             )
+            log_message(
+                f"Field output: {output_path} "
+                f"({format_duration(time.perf_counter() - step_start)})"
+            )
         coastline_count = None
         coastline_path = None
         graticule_count = None
         graticule_path = None
         if args.coastline_output:
             coastline_path = Path(args.coastline_output)
+            step_start = time.perf_counter()
             coastline_count = write_coastline_vtk(
                 coastline_path,
                 projection=args.projection,
@@ -1422,8 +1464,13 @@ def main() -> int:
                 vtk_format=args.vtk_format,
                 plate_carree_seam_mode=args.plate_carree_seam_mode,
             )
+            log_message(
+                f"Coastlines: {coastline_path} "
+                f"({format_duration(time.perf_counter() - step_start)})"
+            )
         if args.graticule_output:
             graticule_path = Path(args.graticule_output)
+            step_start = time.perf_counter()
             graticule_count = write_graticule_vtk(
                 graticule_path,
                 projection=args.projection,
@@ -1434,6 +1481,10 @@ def main() -> int:
                 circle=circle,
                 vtk_format=args.vtk_format,
                 plate_carree_seam_mode=args.plate_carree_seam_mode,
+            )
+            log_message(
+                f"Graticule: {graticule_path} "
+                f"({format_duration(time.perf_counter() - step_start)})"
             )
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -1469,6 +1520,7 @@ def main() -> int:
             f"(spacing {args.graticule_spacing[0]:.16g} x {args.graticule_spacing[1]:.16g} deg, "
             f"radius offset {args.graticule_radius_offset:.16g})"
         )
+    print(f"Total time: {format_duration(time.perf_counter() - total_start)}")
     return 0
 
 
