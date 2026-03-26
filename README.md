@@ -237,7 +237,7 @@ In overlay-only mode:
 - `--projection`, seam handling, and radius offsets still apply
 - the radius defaults to `6371229 m` unless you pass `--radius`
 
-If you want the overlay radius to match a specific ICON grid exactly, pass `--radius` explicitly.
+The same fixed default radius is also used for field export. If you need a different scale, pass `--radius` explicitly.
 
 ## Listing variables in a netCDF file
 

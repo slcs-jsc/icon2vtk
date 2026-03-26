@@ -34,7 +34,7 @@ from pathlib import Path
 import numpy as np
 from netCDF4 import Dataset, num2date
 
-DEFAULT_OVERLAY_RADIUS_M = 6371229.0
+DEFAULT_EARTH_RADIUS_M = 6371229.0
 
 
 class BlankLineHelpFormatter(argparse.HelpFormatter):
@@ -108,9 +108,8 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Sphere radius in meters used for spherical output and as the "
-            "coordinate scale for plate-carree output. Defaults to the grid "
-            "attribute sphere_radius when available, otherwise to "
-            f"{DEFAULT_OVERLAY_RADIUS_M:.16g} for overlay-only runs."
+            "coordinate scale for plate-carree output. Defaults to "
+            f"{DEFAULT_EARTH_RADIUS_M:.16g}."
         ),
     )
     parser.add_argument(
@@ -598,7 +597,7 @@ def read_mesh(
 
         radius = radius_override
         if radius is None:
-            radius = float(getattr(ds, "sphere_radius", 1.0))
+            radius = DEFAULT_EARTH_RADIUS_M
 
         x = np.asarray(ds.variables["cartesian_x_vertices"][:], dtype=np.float64) * radius
         y = np.asarray(ds.variables["cartesian_y_vertices"][:], dtype=np.float64) * radius
@@ -653,21 +652,11 @@ def read_mesh(
     return points, cells, cell_mask, parent_cell_index
 
 
-def read_radius(grid_path: Path, radius_override: float | None) -> float:
-    """Read the sphere radius from the grid file unless the user overrides it."""
+def resolve_radius(radius_override: float | None) -> float:
+    """Resolve the sphere radius, using a fixed default unless overridden."""
     if radius_override is not None:
         return float(radius_override)
-    with Dataset(grid_path) as ds:
-        return float(getattr(ds, "sphere_radius", 1.0))
-
-
-def resolve_radius(grid_path: Path | None, radius_override: float | None) -> float:
-    """Resolve the radius for field export or overlay-only generation."""
-    if radius_override is not None:
-        return float(radius_override)
-    if grid_path is not None:
-        return read_radius(grid_path, None)
-    return DEFAULT_OVERLAY_RADIUS_M
+    return DEFAULT_EARTH_RADIUS_M
 
 
 def ensure_variable_exists(data_path: Path, variable_name: str) -> None:
@@ -1567,7 +1556,7 @@ def main() -> int:
         if args.coarsen_level < 0:
             raise ValueError("Coarsen level must be non-negative")
         step_start = time.perf_counter()
-        radius = resolve_radius(grid_path, args.radius)
+        radius = resolve_radius(args.radius)
         log_message(
             f"Using radius: {radius:.16g} m "
             f"({format_duration(time.perf_counter() - step_start)})"
