@@ -615,6 +615,17 @@ def resolve_radius(grid_path: Path | None, radius_override: float | None) -> flo
     return DEFAULT_OVERLAY_RADIUS_M
 
 
+def ensure_variable_exists(data_path: Path, variable_name: str) -> None:
+    """Fail early if the requested variable is not present in the data file."""
+    with Dataset(data_path) as ds:
+        if variable_name in ds.variables:
+            return
+        available = ", ".join(ds.variables.keys())
+        raise ValueError(
+            f"Variable {variable_name!r} not found. Available variables: {available}"
+        )
+
+
 def read_field(
     data_path: Path,
     variable_name: str,
@@ -725,7 +736,7 @@ def format_duration(seconds: float) -> str:
 
 def log_message(message: str) -> None:
     """Print a concise progress message."""
-    print(message)
+    print(message, flush=True)
 
 
 def list_variables(data_path: Path) -> None:
@@ -1383,6 +1394,12 @@ def main() -> int:
         stats = None
         applied_coarsen_level = 0
         if wants_field_export:
+            step_start = time.perf_counter()
+            ensure_variable_exists(data_path, args.variable)
+            log_message(
+                f"Variable {args.variable}: found in {data_path} "
+                f"({format_duration(time.perf_counter() - step_start)})"
+            )
             step_start = time.perf_counter()
             points, cells, cell_mask, parent_cell_index = read_mesh(
                 grid_path,
