@@ -32,7 +32,7 @@ import time
 from pathlib import Path
 
 import numpy as np
-from netCDF4 import Dataset
+from netCDF4 import Dataset, num2date
 
 DEFAULT_OVERLAY_RADIUS_M = 6371229.0
 
@@ -739,6 +739,95 @@ def format_shape(shape: tuple[int, ...]) -> str:
     return "(" + ", ".join(str(v) for v in shape) + ")"
 
 
+def format_scalar_value(value: object) -> str:
+    """Format one coordinate value for compact user-facing output."""
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    if hasattr(value, "isoformat"):
+        iso_value = value.isoformat()
+        return iso_value.replace("+00:00", "Z")
+    if isinstance(value, float):
+        if math.isnan(value):
+            return "nan"
+        return f"{value:.16g}"
+    return str(value)
+
+
+def format_indexed_value_sequence(
+    dim_name: str,
+    values: list[object],
+    units: str | None,
+    display_units: bool,
+    max_items: int = 12,
+) -> list[str]:
+    """Format a coordinate vector as one ``name[index] = value`` entry per line."""
+    unit_suffix = f" {units}" if display_units and units else ""
+    indexed_values = [
+        f"{dim_name}[{index}] = {format_scalar_value(value)}{unit_suffix}"
+        for index, value in enumerate(values)
+    ]
+    if len(indexed_values) <= max_items:
+        return indexed_values
+    head_count = max_items // 2
+    tail_count = max_items - head_count
+    return indexed_values[:head_count] + ["..."] + indexed_values[-tail_count:]
+
+
+def read_dimension_values(ds: Dataset, dim_name: str) -> tuple[list[object], str | None] | None:
+    """Return formatted coordinate values for a 1-D dimension variable when available."""
+    if dim_name not in ds.variables:
+        return None
+    coord_var = ds.variables[dim_name]
+    if coord_var.dimensions != (dim_name,):
+        return None
+
+    values = np.asarray(coord_var[:]).reshape(-1)
+    units = getattr(coord_var, "units", None)
+    standard_name = getattr(coord_var, "standard_name", None)
+
+    if (standard_name == "time" or dim_name == "time") and units:
+        calendar = getattr(coord_var, "calendar", "standard")
+        converted = num2date(values, units=units, calendar=calendar)
+        return list(np.asarray(converted, dtype=object).reshape(-1)), units
+
+    return [value.item() if isinstance(value, np.generic) else value for value in values], units
+
+
+def is_summary_coordinate(coord_var, dim_name: str) -> bool:
+    """Return whether a dimension should appear in the coordinate summary."""
+    standard_name = getattr(coord_var, "standard_name", None)
+    is_time = standard_name == "time" or dim_name == "time"
+    is_vertical = (
+        standard_name in {"height", "altitude", "air_pressure", "model_level_number"}
+        or dim_name.startswith("height")
+        or dim_name in {"height", "lev", "level", "levels", "plev", "depth"}
+    )
+    return is_time or is_vertical
+
+
+def collect_coordinate_summaries(ds: Dataset) -> list[list[str]]:
+    """Collect shared time and vertical coordinate values present in the file."""
+    coordinate_parts: list[list[str]] = []
+    for dim_name in ds.dimensions:
+        if dim_name not in ds.variables:
+            continue
+        coord_var = ds.variables[dim_name]
+        if not is_summary_coordinate(coord_var, dim_name):
+            continue
+        dimension_values = read_dimension_values(ds, dim_name)
+        if dimension_values is None:
+            continue
+        values, units = dimension_values
+        coord_var = ds.variables[dim_name]
+        display_units = not (getattr(coord_var, "standard_name", None) == "time" or dim_name == "time")
+        coordinate_parts.append(
+            format_indexed_value_sequence(dim_name, values, units, display_units)
+        )
+    return coordinate_parts
+
+
 def format_duration(seconds: float) -> str:
     """Format a short wall-clock duration for user-facing logs."""
     if seconds < 1.0:
@@ -751,9 +840,16 @@ def log_message(message: str) -> None:
     print(message, flush=True)
 
 
+def quote_metadata_text(value: str) -> str:
+    """Return a double-quoted metadata string for display."""
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
 def list_variables(data_path: Path) -> None:
     """Print a compact overview of variables contained in the data file."""
     with Dataset(data_path) as ds:
+        coordinate_summaries = collect_coordinate_summaries(ds)
         print()
         print(f"Variables in {data_path}:")
         print()
@@ -765,16 +861,28 @@ def list_variables(data_path: Path) -> None:
             standard_name = getattr(var, "standard_name", "-")
             dtype = str(var.dtype)
             grid_type = getattr(var, "CDI_grid_type", getattr(var, "grid_type", "-"))
-            long_text = long_name if long_name and long_name != "-" else name
+            metadata_parts = []
+            if long_name and long_name != "-":
+                metadata_parts.append(f"long_name={quote_metadata_text(long_name)}")
             std_text = (
-                f"; standard_name={standard_name}"
+                f"standard_name={quote_metadata_text(standard_name)}"
                 if standard_name and standard_name != "-"
-                else ""
+                else None
             )
+            if std_text is not None:
+                metadata_parts.append(std_text)
             unit_text = f"; units=[{units}]" if units and units != "-" else ""
-            print(f"- {name}: {long_text}{std_text}{unit_text}")
+            metadata_text = "; ".join(metadata_parts) if metadata_parts else "-"
+            print(f"- {name}: {metadata_text}{unit_text}")
             print(f"    dims={dims}; shape={shape}; grid={grid_type}; dtype={dtype}")
             print()
+        if coordinate_summaries:
+            print("Coordinate values:")
+            print()
+            for summary_lines in coordinate_summaries:
+                for line in summary_lines:
+                    print(f"    {line}")
+                print()
 
 
 def write_header(fh, title: str, dataset_type: str, vtk_format: str) -> None:
