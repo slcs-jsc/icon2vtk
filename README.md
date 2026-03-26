@@ -188,6 +188,38 @@ Important details:
 - the requested level is an upper bound, not a guarantee; the script stops early if no further complete sibling families can be collapsed and reports `requested=... applied=...` after the export
 - if you also subset the domain, incomplete families near the subset boundary are kept at their current resolution instead of being forced to coarsen
 
+## Overlay-only mode
+
+You can also generate coastline and graticule VTK files without exporting any ICON field.
+
+This is useful when you only want to recreate the overlays for an existing ParaView scene.
+
+For example, to generate only a graticule in `plate-carree` projection:
+
+```bash
+python3 icon2vtk.py \
+  --projection plate-carree \
+  --graticule-output example/graticule_only.vtk \
+  --graticule-spacing 60 30
+```
+
+Or to generate only coastlines on the sphere:
+
+```bash
+python3 icon2vtk.py \
+  --coastline-output example/coastlines_only.vtk \
+  --coastline-resolution 10m
+```
+
+In overlay-only mode:
+
+- no `DATA.nc GRID.nc VARIABLE` positional arguments are required
+- `--bbox` and `--circle` still work
+- `--projection`, seam handling, and radius offsets still apply
+- the radius defaults to `6371229 m` unless you pass `--radius`
+
+If you want the overlay radius to match a specific ICON grid exactly, pass `--radius` explicitly.
+
 ## Listing variables in a netCDF file
 
 Before exporting, it is often useful to inspect which variables are available in a netCDF file without using `ncdump`.

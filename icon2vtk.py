@@ -33,24 +33,30 @@ from pathlib import Path
 import numpy as np
 from netCDF4 import Dataset
 
+DEFAULT_OVERLAY_RADIUS_M = 6371229.0
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Read a 2-D variable field and grid information from ICON "
-            "netCDF files and write a VTK unstructured grid for ParaView."
+            "Read ICON netCDF data and grid information to write VTK for "
+            "ParaView, or generate coastline/graticule overlays on their own."
         )
     )
-    parser.add_argument("data_file", help="netCDF file holding the field to export")
+    parser.add_argument(
+        "data_file",
+        nargs="?",
+        help="netCDF file holding the field to export or to inspect with --list-variables",
+    )
     parser.add_argument(
         "grid_file",
         nargs="?",
-        help="ICON grid file, e.g. icon_grid_*.nc (required unless --list-variables is used)",
+        help="ICON grid file, e.g. icon_grid_*.nc (required for field export)",
     )
     parser.add_argument(
         "variable",
         nargs="?",
-        help="Variable name to export (required unless --list-variables is used)",
+        help="Variable name to export (required for field export)",
     )
     parser.add_argument(
         "-o",
@@ -89,7 +95,8 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Sphere radius in meters used for spherical output and as the "
             "coordinate scale for plate-carree output. Defaults to the grid "
-            "attribute sphere_radius when available."
+            "attribute sphere_radius when available, otherwise to "
+            f"{DEFAULT_OVERLAY_RADIUS_M:.16g} for overlay-only runs."
         ),
     )
     parser.add_argument(
@@ -596,6 +603,15 @@ def read_radius(grid_path: Path, radius_override: float | None) -> float:
         return float(radius_override)
     with Dataset(grid_path) as ds:
         return float(getattr(ds, "sphere_radius", 1.0))
+
+
+def resolve_radius(grid_path: Path | None, radius_override: float | None) -> float:
+    """Resolve the radius for field export or overlay-only generation."""
+    if radius_override is not None:
+        return float(radius_override)
+    if grid_path is not None:
+        return read_radius(grid_path, None)
+    return DEFAULT_OVERLAY_RADIUS_M
 
 
 def read_field(
@@ -1305,8 +1321,11 @@ def write_graticule_vtk(
 def main() -> int:
     """Command-line entry point."""
     args = parse_args()
-    data_path = Path(args.data_file)
+    data_path = Path(args.data_file) if args.data_file is not None else None
     if args.list_variables:
+        if data_path is None:
+            print("Error: data_file is required with --list-variables", file=sys.stderr)
+            return 1
         try:
             list_variables(data_path)
         except Exception as exc:
@@ -1314,66 +1333,78 @@ def main() -> int:
             return 1
         return 0
 
-    if args.grid_file is None or args.variable is None:
+    wants_field_export = args.variable is not None or args.output is not None
+    wants_overlay = args.coastline_output is not None or args.graticule_output is not None
+    if wants_field_export and (data_path is None or args.grid_file is None or args.variable is None):
+        print("Error: data_file, grid_file, and variable are required for field export", file=sys.stderr)
+        return 1
+    if not wants_field_export and not wants_overlay:
         print(
-            "Error: grid_file and variable are required unless --list-variables is used",
+            "Error: request either a field export (data_file grid_file variable) "
+            "or at least one overlay output option. Use -h for help.",
             file=sys.stderr,
         )
         return 1
+    if not wants_field_export and args.output is not None:
+        print("Error: --output is only valid when exporting a field", file=sys.stderr)
+        return 1
 
-    grid_path = Path(args.grid_file)
-    output_path = choose_output_path(args)
+    grid_path = Path(args.grid_file) if args.grid_file is not None else None
+    output_path = choose_output_path(args) if wants_field_export else None
     bbox = tuple(args.bbox) if args.bbox is not None else None
     circle = tuple(args.circle) if args.circle is not None else None
 
     try:
         if args.coarsen_level < 0:
             raise ValueError("Coarsen level must be non-negative")
-        radius = read_radius(grid_path, args.radius)
-        points, cells, cell_mask, parent_cell_index = read_mesh(
-            grid_path,
-            radius,
-            bbox=bbox,
-            circle=circle,
-        )
-        values, units, title = read_field(
-            data_path,
-            args.variable,
-            args.time_index,
-            args.level_index,
-            expected_ncells=cell_mask.size,
-        )
-        # The field is read against the full original ``ncells`` dimension and
-        # then subset to the same cell mask as the mesh so both stay aligned.
-        values = values[cell_mask]
+        radius = resolve_radius(grid_path, args.radius)
+        cells = None
+        stats = None
         applied_coarsen_level = 0
-        if args.coarsen_level > 0:
-            points, cells, values, applied_coarsen_level = coarsen_mesh(
+        if wants_field_export:
+            points, cells, cell_mask, parent_cell_index = read_mesh(
+                grid_path,
+                radius,
+                bbox=bbox,
+                circle=circle,
+            )
+            values, units, title = read_field(
+                data_path,
+                args.variable,
+                args.time_index,
+                args.level_index,
+                expected_ncells=cell_mask.size,
+            )
+            # The field is read against the full original ``ncells`` dimension and
+            # then subset to the same cell mask as the mesh so both stay aligned.
+            values = values[cell_mask]
+            if args.coarsen_level > 0:
+                points, cells, values, applied_coarsen_level = coarsen_mesh(
+                    points,
+                    cells,
+                    values,
+                    parent_cell_index,
+                    args.coarsen_level,
+                )
+            points, cells = project_mesh(
+                points,
+                cells,
+                args.projection,
+                radius,
+                args.field_radius_offset,
+                args.plate_carree_seam_mode,
+            )
+            stats = summarize_values(values)
+            write_legacy_vtk(
+                output_path,
                 points,
                 cells,
                 values,
-                parent_cell_index,
-                args.coarsen_level,
+                args.variable,
+                title,
+                units,
+                args.vtk_format,
             )
-        points, cells = project_mesh(
-            points,
-            cells,
-            args.projection,
-            radius,
-            args.field_radius_offset,
-            args.plate_carree_seam_mode,
-        )
-        stats = summarize_values(values)
-        write_legacy_vtk(
-            output_path,
-            points,
-            cells,
-            values,
-            args.variable,
-            title,
-            units,
-            args.vtk_format,
-        )
         coastline_count = None
         coastline_path = None
         graticule_count = None
@@ -1408,20 +1439,24 @@ def main() -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
-    print(f"Wrote {output_path} with {cells.shape[0]} cells and variable {args.variable}")
-    if args.projection != "sphere":
+    if wants_field_export:
+        print(f"Wrote {output_path} with {cells.shape[0]} cells and variable {args.variable}")
+    if args.projection != "sphere" or not wants_field_export:
         print(f"Projection: {args.projection}")
     if args.projection == "plate-carree":
         print(f"Plate-carree seam mode: {args.plate_carree_seam_mode}")
-    if args.coarsen_level != 0:
+    if wants_field_export and args.coarsen_level != 0:
         print(f"Coarsen level: requested={args.coarsen_level} applied={applied_coarsen_level}")
-    if args.field_radius_offset != 0.0:
+    if wants_field_export and args.field_radius_offset != 0.0:
         print(f"Field radius offset: {args.field_radius_offset:.16g}")
-    print(
-        "Field stats: "
-        f"count={stats['count']} finite={stats['finite_count']} nan={stats['nan_count']} "
-        f"min={stats['min']:.16g} max={stats['max']:.16g} mean={stats['mean']:.16g}"
-    )
+    if stats is not None:
+        print(
+            "Field stats: "
+            f"count={stats['count']} finite={stats['finite_count']} nan={stats['nan_count']} "
+            f"min={stats['min']:.16g} max={stats['max']:.16g} mean={stats['mean']:.16g}"
+        )
+    elif wants_overlay:
+        print(f"Radius: {radius:.16g}")
     if coastline_path is not None and coastline_count is not None:
         print(
             f"Wrote {coastline_path} with {coastline_count} coastline polylines "
