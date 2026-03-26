@@ -1,5 +1,14 @@
 # ICON2VTK - ICON netCDF to VTK converter
 
+[![release (latest by date)](https://img.shields.io/github/v/release/slcs-jsc/icon2vtk)](https://github.com/slcs-jsc/icon2vtk/releases)
+[![commits since latest release (by SemVer)](https://img.shields.io/github/commits-since/slcs-jsc/icon2vtk/latest)](https://github.com/slcs-jsc/icon2vtk/commits/master)
+[![last commit](https://img.shields.io/github/last-commit/slcs-jsc/icon2vtk.svg)](https://github.com/slcs-jsc/icon2vtk/commits/master)
+[![top language](https://img.shields.io/github/languages/top/slcs-jsc/icon2vtk.svg)](https://github.com/slcs-jsc/icon2vtk/tree/master/src)
+[![code size](https://img.shields.io/github/languages/code-size/slcs-jsc/icon2vtk.svg)](https://github.com/slcs-jsc/icon2vtk/tree/master/src)
+[![repo size](https://img.shields.io/github/repo-size/slcs-jsc/icon2vtk.svg)](https://github.com/slcs-jsc/icon2vtk/tree/master/src)
+[![license](https://img.shields.io/github/license/slcs-jsc/icon2vtk.svg)](https://github.com/slcs-jsc/icon2vtk/blob/master/COPYING)
+[![SWH](https://archive.softwareheritage.org/badge/origin/https://github.com/slcs-jsc/icon2vtk/)](https://archive.softwareheritage.org/browse/origin/?origin_url=https://github.com/slcs-jsc/icon2vtk)
+
 This project provides a Python script, `icon2vtk.py`, that converts cell-based ICON model output from netCDF into legacy VTK files that can be opened directly in ParaView.
 
 The script supports a broader workflow for exploratory visualization:
@@ -722,9 +731,10 @@ python3 icon2vtk.py --help
 
 ## Contact
 
-Lars Hoffmann  
-Jülich Supercomputing Centre  
-Forschungszentrum Jülich  
-E-mail: `l.hoffmann@fz-juelich.de`
-
 If you have questions or need support, please feel free to get in touch.
+
+Dr. Lars Hoffmann
+
+Jülich Supercomputing Centre, Forschungszentrum Jülich
+
+e-mail: <l.hoffmann@fz-juelich.de>
