@@ -423,53 +423,81 @@ def compact_cells(
     return points[used_vertices], inverse.reshape(cells.shape)
 
 
-def average_values(values: np.ndarray) -> float:
-    """Average only the finite values and propagate all-NaN input as ``nan``."""
-    finite = values[np.isfinite(values)]
-    if finite.size == 0:
-        return math.nan
-    return float(np.mean(finite))
-
-
-def order_triangle_vertices(points: np.ndarray, vertex_ids: np.ndarray) -> np.ndarray:
-    """Return the three triangle vertices in a stable, outward-facing order.
-
-    When a parent triangle is reconstructed from four child triangles, the three
-    corner vertices are found as an unordered set.  VTK can still draw a
-    triangle from any order, but a consistent orientation avoids flipped
-    normals and makes the reconstructed topology easier to reason about.
-    """
-    triangle_points = points[vertex_ids]
-    centroid = np.mean(triangle_points, axis=0)
-    centroid_norm = np.linalg.norm(centroid)
-    if centroid_norm == 0.0:
-        return vertex_ids
-
-    normal = centroid / centroid_norm
-    first_vec = triangle_points[0] - centroid
-    first_norm = np.linalg.norm(first_vec)
-    if first_norm == 0.0:
-        return vertex_ids
-    axis_x = first_vec / first_norm
-    axis_y = np.cross(normal, axis_x)
-    axis_y_norm = np.linalg.norm(axis_y)
-    if axis_y_norm == 0.0:
-        return vertex_ids
-    axis_y /= axis_y_norm
-
-    rel = triangle_points - centroid
-    angles = np.arctan2(rel @ axis_y, rel @ axis_x)
-    ordered = vertex_ids[np.argsort(angles)]
-
-    ordered_points = points[ordered]
-    orientation = np.dot(
-        np.cross(
-            ordered_points[1] - ordered_points[0], ordered_points[2] - ordered_points[0]
-        ),
-        centroid,
+def average_values_rows(values: np.ndarray) -> np.ndarray:
+    """Average each row over finite values and propagate all-NaN rows as ``nan``."""
+    finite_mask = np.isfinite(values)
+    finite_counts = finite_mask.sum(axis=1)
+    finite_sums = np.where(finite_mask, values, 0.0).sum(axis=1, dtype=np.float64)
+    means = np.full(values.shape[0], np.nan, dtype=np.float64)
+    np.divide(
+        finite_sums,
+        finite_counts,
+        out=means,
+        where=finite_counts > 0,
     )
-    if orientation < 0.0:
-        ordered[[1, 2]] = ordered[[2, 1]]
+    return means
+
+
+def order_triangle_vertices_batch(
+    points: np.ndarray, vertex_ids: np.ndarray
+) -> np.ndarray:
+    """Vectorized variant of ``order_triangle_vertices`` for many triangles."""
+    triangle_points = points[vertex_ids]
+    centroid = triangle_points.mean(axis=1)
+    ordered = vertex_ids.copy()
+
+    centroid_norm = np.linalg.norm(centroid, axis=1)
+    valid = centroid_norm > 0.0
+    if not np.any(valid):
+        return ordered
+
+    normal = np.zeros_like(centroid)
+    normal[valid] = centroid[valid] / centroid_norm[valid, None]
+
+    first_vec = triangle_points[:, 0, :] - centroid
+    first_norm = np.linalg.norm(first_vec, axis=1)
+    valid &= first_norm > 0.0
+    if not np.any(valid):
+        return ordered
+
+    axis_x = np.zeros_like(first_vec)
+    axis_x[valid] = first_vec[valid] / first_norm[valid, None]
+
+    axis_y = np.cross(normal, axis_x)
+    axis_y_norm = np.linalg.norm(axis_y, axis=1)
+    valid &= axis_y_norm > 0.0
+    if not np.any(valid):
+        return ordered
+
+    axis_y[valid] = axis_y[valid] / axis_y_norm[valid, None]
+
+    rel = triangle_points - centroid[:, None, :]
+    angles = np.empty((vertex_ids.shape[0], 3), dtype=np.float64)
+    angles.fill(0.0)
+    angles[valid] = np.arctan2(
+        np.einsum("nij,nj->ni", rel[valid], axis_y[valid]),
+        np.einsum("nij,nj->ni", rel[valid], axis_x[valid]),
+    )
+
+    order = np.argsort(angles, axis=1)
+    ordered[valid] = np.take_along_axis(vertex_ids[valid], order[valid], axis=1)
+
+    ordered_points = points[ordered[valid]]
+    orientation = np.einsum(
+        "ij,ij->i",
+        np.cross(
+            ordered_points[:, 1, :] - ordered_points[:, 0, :],
+            ordered_points[:, 2, :] - ordered_points[:, 0, :],
+        ),
+        centroid[valid],
+    )
+    flip_mask = orientation < 0.0
+    if np.any(flip_mask):
+        flipped = ordered[valid][flip_mask].copy()
+        flipped[:, [1, 2]] = flipped[:, [2, 1]]
+        ordered_valid = ordered[valid].copy()
+        ordered_valid[flip_mask] = flipped
+        ordered[valid] = ordered_valid
     return ordered
 
 
@@ -496,44 +524,49 @@ def coarsen_one_level(
     if cell_ids.shape[0] != cells.shape[0] or cell_levels.shape[0] != cells.shape[0]:
         raise ValueError("cell metadata length does not match the selected cells")
 
-    families: dict[int, list[int]] = {}
     candidate_mask = cell_levels == candidate_level
-    for cell_idx in np.flatnonzero(candidate_mask):
-        parent_idx = parent_ids[cell_idx]
-        parent_id = int(parent_idx)
-        if parent_id <= 0:
-            continue
-        families.setdefault(parent_id, []).append(cell_idx)
+    candidate_indices = np.flatnonzero(candidate_mask & (parent_ids > 0))
+    if candidate_indices.size == 0:
+        return points, cells, values, cell_ids, cell_levels, False
 
-    coarsened_cells: list[np.ndarray] = []
-    coarsened_values: list[float] = []
-    coarsened_ids: list[int] = []
-    coarsened_levels: list[int] = []
+    candidate_parent_ids = parent_ids[candidate_indices]
+    sort_order = np.argsort(candidate_parent_ids, kind="mergesort")
+    sorted_parent_ids = candidate_parent_ids[sort_order]
+    sorted_indices = candidate_indices[sort_order]
+    unique_parent_ids, family_starts, family_counts = np.unique(
+        sorted_parent_ids, return_index=True, return_counts=True
+    )
+    complete_family_mask = family_counts == 4
+    if not np.any(complete_family_mask):
+        return points, cells, values, cell_ids, cell_levels, False
+
+    family_starts = family_starts[complete_family_mask]
+    complete_parent_ids = unique_parent_ids[complete_family_mask].astype(np.int64)
+    sibling_indices = sorted_indices[family_starts[:, None] + np.arange(4)]
+    sibling_cells = cells[sibling_indices]
+    sorted_vertices = np.sort(sibling_cells.reshape(sibling_indices.shape[0], 12), axis=1)
+    prev_vertices = np.pad(sorted_vertices[:, :-1], ((0, 0), (1, 0)), constant_values=-1)
+    next_vertices = np.pad(sorted_vertices[:, 1:], ((0, 0), (0, 1)), constant_values=-1)
+    parent_vertex_mask = (sorted_vertices != prev_vertices) & (
+        sorted_vertices != next_vertices
+    )
+    valid_family_mask = parent_vertex_mask.sum(axis=1) == 3
+    if not np.any(valid_family_mask):
+        return points, cells, values, cell_ids, cell_levels, False
+
+    sibling_indices = sibling_indices[valid_family_mask]
+    sibling_cells = sibling_cells[valid_family_mask]
+    complete_parent_ids = complete_parent_ids[valid_family_mask]
+    parent_vertices = sorted_vertices[valid_family_mask][parent_vertex_mask[valid_family_mask]].reshape(-1, 3)
+
+    coarsened_cells = order_triangle_vertices_batch(points, parent_vertices.astype(np.int64))
+    coarsened_values = average_values_rows(values[sibling_indices])
+    coarsened_ids = complete_parent_ids
+    coarsened_levels = np.full(
+        complete_parent_ids.shape[0], candidate_level + 1, dtype=np.int64
+    )
     keep_child_mask = np.ones(cells.shape[0], dtype=bool)
-
-    for sibling_indices in families.values():
-        if len(sibling_indices) != 4:
-            continue
-
-        sibling_cells = cells[sibling_indices]
-        vertex_ids, counts = np.unique(sibling_cells.ravel(), return_counts=True)
-        # In the four-child pattern, the parent corners are exactly the vertices
-        # that appear once across the sibling union. Interior split vertices are
-        # shared and therefore have a higher multiplicity.
-        parent_vertices = vertex_ids[counts == 1]
-        if parent_vertices.size != 3:
-            continue
-
-        ordered_vertices = order_triangle_vertices(
-            points, parent_vertices.astype(np.int64)
-        )
-        coarsened_cells.append(ordered_vertices)
-        coarsened_values.append(
-            average_values(values[np.asarray(sibling_indices, dtype=np.int64)])
-        )
-        coarsened_ids.append(int(parent_ids[sibling_indices[0]]))
-        coarsened_levels.append(candidate_level + 1)
-        keep_child_mask[np.asarray(sibling_indices, dtype=np.int64)] = False
+    keep_child_mask[sibling_indices.reshape(-1)] = False
 
     # Keep all cells that were not replaced by a reconstructed parent.
     remaining_cells = cells[keep_child_mask]
@@ -541,18 +574,14 @@ def coarsen_one_level(
     remaining_ids = cell_ids[keep_child_mask]
     remaining_levels = cell_levels[keep_child_mask]
 
-    if coarsened_cells:
-        combined_cells = np.vstack(
-            (remaining_cells, np.asarray(coarsened_cells, dtype=np.int64))
-        )
+    if coarsened_cells.shape[0] > 0:
+        combined_cells = np.vstack((remaining_cells, coarsened_cells))
         combined_values = np.concatenate(
-            (remaining_values, np.asarray(coarsened_values, dtype=np.float64))
+            (remaining_values, coarsened_values)
         )
-        combined_ids = np.concatenate(
-            (remaining_ids, np.asarray(coarsened_ids, dtype=np.int64))
-        )
+        combined_ids = np.concatenate((remaining_ids, coarsened_ids))
         combined_levels = np.concatenate(
-            (remaining_levels, np.asarray(coarsened_levels, dtype=np.int64))
+            (remaining_levels, coarsened_levels)
         )
     else:
         combined_cells = remaining_cells
@@ -567,7 +596,7 @@ def coarsen_one_level(
         combined_values,
         combined_ids,
         combined_levels,
-        bool(coarsened_cells),
+        True,
     )
 
 
