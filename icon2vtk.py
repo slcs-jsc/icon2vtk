@@ -1017,7 +1017,12 @@ def write_header(fh, title: str, dataset_type: str, vtk_format: str) -> None:
     fh.write(f"DATASET {dataset_type}\n".encode("ascii"))
 
 
-def write_numeric_array(fh, array: np.ndarray, vtk_format: str, fmt: str) -> None:
+def write_numeric_array(
+    fh,
+    array: np.ndarray,
+    vtk_format: str,
+    trailing_newline: bool = True,
+) -> None:
     """Write a numeric NumPy array in legacy VTK ASCII or binary form.
 
     Legacy binary VTK expects big-endian byte order.  NumPy arrays are normally
@@ -1048,7 +1053,8 @@ def write_numeric_array(fh, array: np.ndarray, vtk_format: str, fmt: str) -> Non
 
     be_array = np.asarray(array, dtype=array.dtype.newbyteorder(">"))
     fh.write(be_array.tobytes(order="C"))
-    fh.write(b"\n")
+    if trailing_newline:
+        fh.write(b"\n")
 
 
 def vtk_precision_spec(vtk_precision: str) -> tuple[np.dtype, str]:
@@ -1058,6 +1064,60 @@ def vtk_precision_spec(vtk_precision: str) -> tuple[np.dtype, str]:
     if vtk_precision == "float64":
         return np.dtype(np.float64), "double"
     raise ValueError(f"Unsupported VTK precision {vtk_precision!r}")
+
+
+def write_triangle_cells(
+    fh,
+    cells: np.ndarray,
+    vtk_format: str,
+    chunk_size: int = 1_000_000,
+) -> None:
+    """Write legacy VTK triangle connectivity without materializing one giant array."""
+    cells_int = np.asarray(cells, dtype=np.int32)
+    if vtk_format == "ascii":
+        for start in range(0, cells_int.shape[0], chunk_size):
+            stop = min(start + chunk_size, cells_int.shape[0])
+            for row in cells_int[start:stop]:
+                fh.write(
+                    f"3 {int(row[0])} {int(row[1])} {int(row[2])}\n".encode("ascii")
+                )
+        return
+
+    chunk = np.empty((min(chunk_size, cells_int.shape[0]), 4), dtype=np.int32)
+    chunk[:, 0] = 3
+    for start in range(0, cells_int.shape[0], chunk_size):
+        stop = min(start + chunk_size, cells_int.shape[0])
+        size = stop - start
+        chunk_view = chunk[:size]
+        chunk_view[:, 1:] = cells_int[start:stop]
+        write_numeric_array(fh, chunk_view, vtk_format, trailing_newline=False)
+    fh.write(b"\n")
+
+
+def write_constant_cell_types(
+    fh,
+    ncells: int,
+    vtk_format: str,
+    cell_type: int = 5,
+    chunk_size: int = 4_000_000,
+) -> None:
+    """Write repeated VTK cell types in chunks to avoid a huge temporary array."""
+    if vtk_format == "ascii":
+        line = f"{cell_type}\n".encode("ascii")
+        for _ in range(ncells):
+            fh.write(line)
+        return
+
+    chunk = np.full(min(chunk_size, ncells), cell_type, dtype=np.int32)
+    for start in range(0, ncells, chunk_size):
+        stop = min(start + chunk_size, ncells)
+        write_numeric_array(
+            fh,
+            chunk[: stop - start],
+            vtk_format,
+            trailing_newline=False,
+        )
+    fh.write(b"\n")
 
 
 def write_legacy_vtk(
@@ -1084,22 +1144,16 @@ def write_legacy_vtk(
 
         fh.write(f"POINTS {npoints} {vtk_float_name}\n".encode("ascii"))
         write_numeric_array(
-            fh, np.asarray(points, dtype=float_dtype), vtk_format, vtk_float_name
+            fh, np.asarray(points, dtype=float_dtype), vtk_format
         )
 
         fh.write(f"CELLS {ncells} {ncells * 4}\n".encode("ascii"))
         # Legacy VTK ``CELLS`` encodes each cell as ``npts id0 id1 id2 ...``.
         # For ICON this is always ``3`` followed by three triangle vertex ids.
-        cell_array = np.column_stack(
-            (
-                np.full(ncells, 3, dtype=np.int32),
-                np.asarray(cells, dtype=np.int32),
-            )
-        )
-        write_numeric_array(fh, cell_array, vtk_format, "int")
+        write_triangle_cells(fh, cells, vtk_format)
 
         fh.write(f"CELL_TYPES {ncells}\n".encode("ascii"))
-        write_numeric_array(fh, np.full(ncells, 5, dtype=np.int32), vtk_format, "int")
+        write_constant_cell_types(fh, ncells, vtk_format)
 
         fh.write(f"CELL_DATA {ncells}\n".encode("ascii"))
         fh.write(
@@ -1107,7 +1161,7 @@ def write_legacy_vtk(
         )
         fh.write(b"LOOKUP_TABLE default\n")
         write_numeric_array(
-            fh, np.asarray(values, dtype=float_dtype), vtk_format, vtk_float_name
+            fh, np.asarray(values, dtype=float_dtype), vtk_format
         )
 
 
@@ -1441,7 +1495,7 @@ def write_coastline_vtk(
         )
         fh.write(f"POINTS {points.shape[0]} {vtk_float_name}\n".encode("ascii"))
         write_numeric_array(
-            fh, np.asarray(points, dtype=float_dtype), vtk_format, vtk_float_name
+            fh, np.asarray(points, dtype=float_dtype), vtk_format
         )
         total_size = sum(length + 1 for length in line_lengths)
         fh.write(f"LINES {len(line_lengths)} {total_size}\n".encode("ascii"))
@@ -1458,7 +1512,7 @@ def write_coastline_vtk(
                 fh.write((" ".join(str(int(v)) for v in row) + "\n").encode("ascii"))
         else:
             line_blob = np.concatenate(line_rows)
-            write_numeric_array(fh, line_blob, vtk_format, "int")
+            write_numeric_array(fh, line_blob, vtk_format)
 
     return len(line_lengths)
 
@@ -1599,7 +1653,7 @@ def write_graticule_vtk(
         )
         fh.write(f"POINTS {points.shape[0]} {vtk_float_name}\n".encode("ascii"))
         write_numeric_array(
-            fh, np.asarray(points, dtype=float_dtype), vtk_format, vtk_float_name
+            fh, np.asarray(points, dtype=float_dtype), vtk_format
         )
         total_size = sum(length + 1 for length in line_lengths)
         fh.write(f"LINES {len(line_lengths)} {total_size}\n".encode("ascii"))
@@ -1616,7 +1670,7 @@ def write_graticule_vtk(
                 fh.write((" ".join(str(int(v)) for v in row) + "\n").encode("ascii"))
         else:
             line_blob = np.concatenate(line_rows)
-            write_numeric_array(fh, line_blob, vtk_format, "int")
+            write_numeric_array(fh, line_blob, vtk_format)
 
     return len(line_lengths)
 
