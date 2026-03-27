@@ -7,9 +7,10 @@
 [![code size](https://img.shields.io/github/languages/code-size/slcs-jsc/icon2vtk.svg)](https://github.com/slcs-jsc/icon2vtk/tree/master/src)
 [![repo size](https://img.shields.io/github/repo-size/slcs-jsc/icon2vtk.svg)](https://github.com/slcs-jsc/icon2vtk/tree/master/src)
 [![license](https://img.shields.io/github/license/slcs-jsc/icon2vtk.svg)](https://github.com/slcs-jsc/icon2vtk/blob/master/COPYING)
+[![doi](https://zenodo.org/badge/DOI/10.5281/zenodo.19246491.svg)](https://doi.org/10.5281/zenodo.19246491)
 [![SWH](https://archive.softwareheritage.org/badge/origin/https://github.com/slcs-jsc/icon2vtk/)](https://archive.softwareheritage.org/browse/origin/?origin_url=https://github.com/slcs-jsc/icon2vtk)
 
-This project provides a Python script, `icon2vtk.py`, that converts cell-based ICON model output from netCDF into legacy VTK files that can be opened directly in ParaView.
+ICON2VTK is a lightweight Python command-line tool that converts cell-based ICON model output from netCDF into legacy VTK files for direct visualization in ParaView.
 
 The script supports a broader workflow for exploratory visualization:
 
