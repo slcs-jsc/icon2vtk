@@ -385,6 +385,17 @@ ASCII output is mainly useful for debugging or inspection:
 
 However, ASCII files are significantly larger and slower to read and write.
 
+Floating-point VTK output precision is controlled separately:
+
+```bash
+--vtk-precision float32
+```
+
+This setting affects VTK point coordinates and field scalar values. The default
+is `float32`, which usually reduces file size and write time. Use
+`--vtk-precision float64` if you prefer double-precision geometry and scalar
+output.
+
 To use ASCII instead of binary:
 
 ```bash
@@ -720,6 +731,7 @@ python3 icon2vtk.py --help
 - `--level-index`: select one or more vertical levels for slice export
 - `--coarsen-level N`: coarsen by up to `N` ICON refinement levels when `parent_cell_index` is available
 - `--vtk-format ascii|binary`: choose legacy VTK encoding
+- `--vtk-precision float32|float64`: choose floating-point precision for VTK points and scalar arrays
 - `--bbox ...`: select a rectangular region
 - `--circle ...`: select a circular region
 - `--field-radius-offset`: lift the field surface

@@ -219,6 +219,15 @@ def parse_args() -> argparse.Namespace:
         help="Legacy VTK output format (default: binary)",
     )
     parser.add_argument(
+        "--vtk-precision",
+        choices=("float32", "float64"),
+        default="float32",
+        help=(
+            "Floating-point precision used for VTK point coordinates and field "
+            "scalars (default: float32)"
+        ),
+    )
+    parser.add_argument(
         "--list-variables",
         action="store_true",
         help="List variables in the netCDF data file and exit",
@@ -1042,6 +1051,15 @@ def write_numeric_array(fh, array: np.ndarray, vtk_format: str, fmt: str) -> Non
     fh.write(b"\n")
 
 
+def vtk_precision_spec(vtk_precision: str) -> tuple[np.dtype, str]:
+    """Map a CLI precision selection to NumPy and VTK type names."""
+    if vtk_precision == "float32":
+        return np.dtype(np.float32), "float"
+    if vtk_precision == "float64":
+        return np.dtype(np.float64), "double"
+    raise ValueError(f"Unsupported VTK precision {vtk_precision!r}")
+
+
 def write_legacy_vtk(
     output_path: Path,
     points: np.ndarray,
@@ -1051,10 +1069,12 @@ def write_legacy_vtk(
     title: str,
     units: str | None,
     vtk_format: str,
+    vtk_precision: str,
 ) -> None:
     """Write the field mesh as a legacy VTK ``UNSTRUCTURED_GRID``."""
     npoints = points.shape[0]
     ncells = cells.shape[0]
+    float_dtype, vtk_float_name = vtk_precision_spec(vtk_precision)
 
     with output_path.open("wb") as fh:
         header = title
@@ -1062,9 +1082,9 @@ def write_legacy_vtk(
             header = f"{header} [{units}]"
         write_header(fh, header, "UNSTRUCTURED_GRID", vtk_format)
 
-        fh.write(f"POINTS {npoints} double\n".encode("ascii"))
+        fh.write(f"POINTS {npoints} {vtk_float_name}\n".encode("ascii"))
         write_numeric_array(
-            fh, np.asarray(points, dtype=np.float64), vtk_format, "double"
+            fh, np.asarray(points, dtype=float_dtype), vtk_format, vtk_float_name
         )
 
         fh.write(f"CELLS {ncells} {ncells * 4}\n".encode("ascii"))
@@ -1082,10 +1102,12 @@ def write_legacy_vtk(
         write_numeric_array(fh, np.full(ncells, 5, dtype=np.int32), vtk_format, "int")
 
         fh.write(f"CELL_DATA {ncells}\n".encode("ascii"))
-        fh.write(f"SCALARS {sanitize_name(variable_name)} double 1\n".encode("ascii"))
+        fh.write(
+            f"SCALARS {sanitize_name(variable_name)} {vtk_float_name} 1\n".encode("ascii")
+        )
         fh.write(b"LOOKUP_TABLE default\n")
         write_numeric_array(
-            fh, np.asarray(values, dtype=np.float64), vtk_format, "double"
+            fh, np.asarray(values, dtype=float_dtype), vtk_format, vtk_float_name
         )
 
 
@@ -1327,6 +1349,7 @@ def write_coastline_vtk(
     bbox: tuple[float, float, float, float] | None = None,
     circle: tuple[float, float, float] | None = None,
     vtk_format: str = "ascii",
+    vtk_precision: str = "float32",
     plate_carree_seam_mode: str = "wrap",
 ) -> int:
     """Write Natural Earth coastlines as legacy VTK ``POLYDATA`` lines."""
@@ -1411,13 +1434,14 @@ def write_coastline_vtk(
         raise RuntimeError("No coastline geometries were found in the Cartopy dataset")
 
     points = np.vstack(all_points)
+    float_dtype, vtk_float_name = vtk_precision_spec(vtk_precision)
     with output_path.open("wb") as fh:
         write_header(
             fh, f"Natural Earth coastlines [{resolution}]", "POLYDATA", vtk_format
         )
-        fh.write(f"POINTS {points.shape[0]} double\n".encode("ascii"))
+        fh.write(f"POINTS {points.shape[0]} {vtk_float_name}\n".encode("ascii"))
         write_numeric_array(
-            fh, np.asarray(points, dtype=np.float64), vtk_format, "double"
+            fh, np.asarray(points, dtype=float_dtype), vtk_format, vtk_float_name
         )
         total_size = sum(length + 1 for length in line_lengths)
         fh.write(f"LINES {len(line_lengths)} {total_size}\n".encode("ascii"))
@@ -1464,6 +1488,7 @@ def write_graticule_vtk(
     bbox: tuple[float, float, float, float] | None = None,
     circle: tuple[float, float, float] | None = None,
     vtk_format: str = "ascii",
+    vtk_precision: str = "float32",
     plate_carree_seam_mode: str = "wrap",
 ) -> int:
     """Write longitude and latitude guide lines as VTK ``POLYDATA``."""
@@ -1564,6 +1589,7 @@ def write_graticule_vtk(
         raise RuntimeError("No graticule lines were generated for the requested region")
 
     points = np.vstack(all_points)
+    float_dtype, vtk_float_name = vtk_precision_spec(vtk_precision)
     with output_path.open("wb") as fh:
         write_header(
             fh,
@@ -1571,9 +1597,9 @@ def write_graticule_vtk(
             "POLYDATA",
             vtk_format,
         )
-        fh.write(f"POINTS {points.shape[0]} double\n".encode("ascii"))
+        fh.write(f"POINTS {points.shape[0]} {vtk_float_name}\n".encode("ascii"))
         write_numeric_array(
-            fh, np.asarray(points, dtype=np.float64), vtk_format, "double"
+            fh, np.asarray(points, dtype=float_dtype), vtk_format, vtk_float_name
         )
         total_size = sum(length + 1 for length in line_lengths)
         fh.write(f"LINES {len(line_lengths)} {total_size}\n".encode("ascii"))
@@ -1750,6 +1776,7 @@ def main() -> int:
                         title,
                         units,
                         args.vtk_format,
+                        args.vtk_precision,
                     )
                     log_message(
                         f"Field output: {current_output_path} "
@@ -1781,6 +1808,7 @@ def main() -> int:
                 bbox=bbox,
                 circle=circle,
                 vtk_format=args.vtk_format,
+                vtk_precision=args.vtk_precision,
                 plate_carree_seam_mode=args.plate_carree_seam_mode,
             )
             log_message(
@@ -1799,6 +1827,7 @@ def main() -> int:
                 bbox=bbox,
                 circle=circle,
                 vtk_format=args.vtk_format,
+                vtk_precision=args.vtk_precision,
                 plate_carree_seam_mode=args.plate_carree_seam_mode,
             )
             log_message(
