@@ -181,11 +181,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--river-radius-offset",
         type=float,
-        default=15000.0,
+        default=13000.0,
         help=(
             "Add this offset to the exported river geometry. For sphere "
             "this increases the sphere radius; for flat projections it "
-            "becomes a constant z offset (default: 15000)."
+            "becomes a constant z offset (default: 13000)."
         ),
     )
     parser.add_argument(
@@ -204,11 +204,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--country-radius-offset",
         type=float,
-        default=12000.0,
+        default=16000.0,
         help=(
             "Add this offset to the exported country boundary geometry. For "
             "sphere this increases the sphere radius; for flat projections it "
-            "becomes a constant z offset (default: 12000)."
+            "becomes a constant z offset (default: 16000)."
         ),
     )
     parser.add_argument(
@@ -227,11 +227,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--province-radius-offset",
         type=float,
-        default=13000.0,
+        default=16000.0,
         help=(
             "Add this offset to the exported province boundary geometry. For "
             "sphere this increases the sphere radius; for flat projections it "
-            "becomes a constant z offset (default: 13000)."
+            "becomes a constant z offset (default: 16000)."
         ),
     )
     parser.add_argument(
@@ -274,11 +274,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--graticule-radius-offset",
         type=float,
-        default=20000.0,
+        default=19000.0,
         help=(
             "Add this offset to the exported graticule geometry. For sphere "
             "this increases the sphere radius; for flat projections it "
-            "becomes a constant z offset (default: 20000)."
+            "becomes a constant z offset (default: 19000)."
         ),
     )
     parser.add_argument(

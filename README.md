@@ -442,7 +442,7 @@ python3 icon2vtk.py \
   -o example/ts_with_coast.vtk \
   --coastline-output example/coastlines_10m.vtk \
   --coastline-resolution 10m \
-  --coastline-radius-offset 1000
+  --coastline-radius-offset 10000
 ```
 
 This command produces two files:
@@ -467,10 +467,10 @@ Typical choice:
 Coastlines can be written at a slightly larger radius than the field:
 
 ```bash
---coastline-radius-offset 1000
+--coastline-radius-offset 10000
 ```
 
-This helps avoid visual overlap or z-fighting when multiple datasets lie at nearly the same radius.
+In practice, offsets on the order of 10 to 20 km tend to work better than 1 to 2 km for avoiding visual overlap or z-fighting when multiple datasets lie at nearly the same radius.
 
 ### Rivers
 
@@ -487,7 +487,7 @@ python3 icon2vtk.py \
   -o example/ts_with_rivers.vtk \
   --river-output example/rivers_10m.vtk \
   --river-resolution 10m \
-  --river-radius-offset 1500
+  --river-radius-offset 13000
 ```
 
 ### Country boundaries
@@ -505,7 +505,7 @@ python3 icon2vtk.py \
   -o example/ts_with_countries.vtk \
   --country-output example/country_boundaries_10m.vtk \
   --country-resolution 10m \
-  --country-radius-offset 1200
+  --country-radius-offset 16000
 ```
 
 ### Province boundaries
@@ -523,7 +523,7 @@ python3 icon2vtk.py \
   -o example/ts_with_provinces.vtk \
   --province-output example/province_boundaries_10m.vtk \
   --province-resolution 10m \
-  --province-radius-offset 1300
+  --province-radius-offset 16000
 ```
 
 All Natural Earth line overlays support the same `110m`, `50m`, and `10m` resolution choices and the same region filtering, projection, seam handling, and radius-offset behavior.
@@ -545,7 +545,7 @@ python3 icon2vtk.py \
   -o example/ts_with_graticule.vtk \
   --graticule-output example/graticule_30x15.vtk \
   --graticule-spacing 30 15 \
-  --graticule-radius-offset 2000
+  --graticule-radius-offset 19000
 ```
 
 This writes:
@@ -579,7 +579,7 @@ Smaller spacing gives more lines and a denser visual grid.
 Like coastlines, the graticule can be lifted above the sphere:
 
 ```bash
---graticule-radius-offset 2000
+--graticule-radius-offset 19000
 ```
 
 This is often useful when field surfaces, coastlines, and grid lines are shown together.
@@ -607,13 +607,13 @@ python3 icon2vtk.py \
   -o example/ts_circle_offset.vtk \
   --coastline-output example/coastlines_circle_offset.vtk \
   --coastline-resolution 10m \
-  --coastline-radius-offset 6000
+  --coastline-radius-offset 10000
 ```
 
 In that example:
 
 - the field is lifted by 5000 m
-- the coastlines are lifted by 6000 m
+- the coastlines are lifted by 10000 m
 
 So the coastlines still remain slightly above the field.
 
@@ -637,7 +637,7 @@ python3 icon2vtk.py \
   -o example/ts_europe.vtk \
   --coastline-output example/coastlines_europe.vtk \
   --coastline-resolution 10m \
-  --coastline-radius-offset 1000
+  --coastline-radius-offset 10000
 ```
 
 ### How bbox selection works
@@ -689,7 +689,7 @@ python3 icon2vtk.py \
   -o example/ts_circle.vtk \
   --coastline-output example/coastlines_circle.vtk \
   --coastline-resolution 10m \
-  --coastline-radius-offset 1000
+  --coastline-radius-offset 10000
 ```
 
 ### How circle selection works
@@ -727,16 +727,16 @@ python3 icon2vtk.py \
   -o example/ts_combo.vtk \
   --coastline-output example/coastlines_combo.vtk \
   --coastline-resolution 10m \
-  --coastline-radius-offset 6000 \
+  --coastline-radius-offset 10000 \
   --river-output example/rivers_combo.vtk \
   --river-resolution 10m \
-  --river-radius-offset 6100 \
+  --river-radius-offset 13000 \
   --country-output example/countries_combo.vtk \
   --country-resolution 10m \
-  --country-radius-offset 6200 \
+  --country-radius-offset 16000 \
   --graticule-output example/graticule_combo.vtk \
   --graticule-spacing 30 15 \
-  --graticule-radius-offset 6500
+  --graticule-radius-offset 19000
 ```
 
 This produces:
