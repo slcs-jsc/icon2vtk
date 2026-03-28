@@ -6,6 +6,7 @@
 [![top language](https://img.shields.io/github/languages/top/slcs-jsc/icon2vtk.svg)](https://github.com/slcs-jsc/icon2vtk/tree/master/src)
 [![code size](https://img.shields.io/github/languages/code-size/slcs-jsc/icon2vtk.svg)](https://github.com/slcs-jsc/icon2vtk/tree/master/src)
 [![repo size](https://img.shields.io/github/repo-size/slcs-jsc/icon2vtk.svg)](https://github.com/slcs-jsc/icon2vtk/tree/master/src)
+[![tests](https://img.shields.io/github/actions/workflow/status/slcs-jsc/icon2vtk/tests.yml?branch=master&label=tests)](https://github.com/slcs-jsc/icon2vtk/actions)
 [![license](https://img.shields.io/github/license/slcs-jsc/icon2vtk.svg)](https://github.com/slcs-jsc/icon2vtk/blob/master/COPYING)
 [![doi](https://zenodo.org/badge/DOI/10.5281/zenodo.19246491.svg)](https://doi.org/10.5281/zenodo.19246491)
 [![SWH](https://archive.softwareheritage.org/badge/origin/https://github.com/slcs-jsc/icon2vtk/)](https://archive.softwareheritage.org/browse/origin/?origin_url=https://github.com/slcs-jsc/icon2vtk)
