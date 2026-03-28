@@ -29,7 +29,7 @@ The main script is:
 
 ## What the script does
 
-ICON commonly stores atmospheric fields on an unstructured triangular grid. In the example files in this directory, the mesh geometry is stored separately from the actual model variables:
+ICON commonly stores atmospheric fields on an unstructured triangular grid. In the bundled sample files in this repository, the mesh geometry is stored separately from the actual model variables:
 
 - the data file contains the variable values, for example `ts`, `pr`, or `ta`
 - the grid file contains the triangular connectivity and the vertex coordinates
@@ -69,9 +69,9 @@ The script uses the ICON grid file to obtain:
 ## Main files in this directory
 
 - `icon2vtk.py`: the converter
-- `example/icon_grid_*.nc`: ICON horizontal grid description
-- `example/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc`: example 2-D ICON output
-- `example/aes_amip_atm_3d_qp_ml_19790101T000000Z.nc`: example 3-D ICON output
+- `data/icon_grid_*.nc`: ICON horizontal grid description
+- `data/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc`: example 2-D ICON output
+- `data/aes_amip_atm_3d_qp_ml_19790101T000000Z.nc`: example 3-D ICON output
 
 ## Requirements
 
@@ -137,7 +137,7 @@ This writes a small set of VTK files back into `example/`:
 
 This is a good first check that:
 
-- your Python environment can read the ICON netCDF files
+- your Python environment can read the ICON netCDF files from `data/`
 - the optional overlay dependencies are installed if you requested coastlines
 - ParaView can open the generated field and overlay files together
 
@@ -174,8 +174,8 @@ For example:
 
 ```bash
 python3 icon2vtk.py \
-  example/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
-  example/icon_grid_0049_R02B04_G.nc \
+  data/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
+  data/icon_grid_0049_R02B04_G.nc \
   ts
 ```
 
@@ -187,8 +187,8 @@ For example, to export two timesteps of a 2-D field:
 
 ```bash
 python3 icon2vtk.py \
-  example/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
-  example/icon_grid_0049_R02B04_G.nc \
+  data/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
+  data/icon_grid_0049_R02B04_G.nc \
   ts \
   --time-index 0,1 \
   -o example/ts_batch.vtk
@@ -203,8 +203,8 @@ If the grid file provides the ICON variable `parent_cell_index`, you can coarsen
 
 ```bash
 python3 icon2vtk.py \
-  example/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
-  example/icon_grid_0049_R02B04_G.nc \
+  data/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
+  data/icon_grid_0049_R02B04_G.nc \
   ts \
   --coarsen-level 1 \
   -o example/ts_coarse.vtk
@@ -266,13 +266,13 @@ Before exporting, it is often useful to inspect which variables are available in
 You can do that with:
 
 ```bash
-python3 icon2vtk.py example/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc --list-variables
+python3 icon2vtk.py data/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc --list-variables
 ```
 
 or, for the 3-D example file:
 
 ```bash
-python3 icon2vtk.py example/aes_amip_atm_3d_qp_ml_19790101T000000Z.nc --list-variables
+python3 icon2vtk.py data/aes_amip_atm_3d_qp_ml_19790101T000000Z.nc --list-variables
 ```
 
 The output lists each variable with its metadata and dimensions, followed by a coordinate summary that maps available time and level indices to their values.
@@ -305,8 +305,8 @@ This is a good starting point for testing with a 2-D field:
 
 ```bash
 python3 icon2vtk.py \
-  example/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
-  example/icon_grid_0049_R02B04_G.nc \
+  data/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
+  data/icon_grid_0049_R02B04_G.nc \
   ts \
   --time-index 1 \
   -o example/ts_t1.vtk
@@ -341,8 +341,8 @@ Example:
 
 ```bash
 python3 icon2vtk.py \
-  example/aes_amip_atm_3d_qp_ml_19790101T000000Z.nc \
-  example/icon_grid_0049_R02B04_G.nc \
+  data/aes_amip_atm_3d_qp_ml_19790101T000000Z.nc \
+  data/icon_grid_0049_R02B04_G.nc \
   ta \
   --time-index 1 \
   --level-index 45 \
@@ -407,8 +407,8 @@ Example:
 
 ```bash
 python3 icon2vtk.py \
-  example/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
-  example/icon_grid_0049_R02B04_G.nc \
+  data/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
+  data/icon_grid_0049_R02B04_G.nc \
   ts \
   --time-index 1 \
   --vtk-format ascii \
@@ -425,8 +425,8 @@ Example:
 
 ```bash
 python3 icon2vtk.py \
-  example/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
-  example/icon_grid_0049_R02B04_G.nc \
+  data/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
+  data/icon_grid_0049_R02B04_G.nc \
   ts \
   --time-index 1 \
   -o example/ts_with_coast.vtk \
@@ -472,8 +472,8 @@ Example:
 
 ```bash
 python3 icon2vtk.py \
-  example/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
-  example/icon_grid_0049_R02B04_G.nc \
+  data/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
+  data/icon_grid_0049_R02B04_G.nc \
   ts \
   --time-index 1 \
   -o example/ts_with_graticule.vtk \
@@ -532,8 +532,8 @@ Example:
 
 ```bash
 python3 icon2vtk.py \
-  example/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
-  example/icon_grid_0049_R02B04_G.nc \
+  data/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
+  data/icon_grid_0049_R02B04_G.nc \
   ts \
   --time-index 1 \
   --circle 10 50 1500 \
@@ -563,8 +563,8 @@ Example:
 
 ```bash
 python3 icon2vtk.py \
-  example/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
-  example/icon_grid_0049_R02B04_G.nc \
+  data/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
+  data/icon_grid_0049_R02B04_G.nc \
   ts \
   --time-index 1 \
   --bbox -15 30 35 72 \
@@ -615,8 +615,8 @@ Example:
 
 ```bash
 python3 icon2vtk.py \
-  example/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
-  example/icon_grid_0049_R02B04_G.nc \
+  data/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
+  data/icon_grid_0049_R02B04_G.nc \
   ts \
   --time-index 1 \
   --circle 10 50 1500 \
@@ -652,8 +652,8 @@ but not both in the same command.
 
 ```bash
 python3 icon2vtk.py \
-  example/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
-  example/icon_grid_0049_R02B04_G.nc \
+  data/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
+  data/icon_grid_0049_R02B04_G.nc \
   ts \
   --time-index 1 \
   --circle 10 50 1500 \
