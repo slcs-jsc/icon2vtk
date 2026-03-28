@@ -1,0 +1,2 @@
+output_file,variable,time_index,level_index,min,max,mean,count,nan_count
+core_2d_stats_csv_ts_t1.vtk,ts,1,nan,213.8873138427734,316.6099243164062,287.285965898633,20480,0

@@ -22,6 +22,7 @@ The script supports a broader workflow for exploratory visualization:
 - write legacy VTK in ASCII or binary format
 - add coastline, river, country-boundary, province-boundary, and longitude-latitude graticule overlays
 - print basic statistics for each exported field slice
+- optionally write field statistics to a CSV file for later analysis
 
 The main script is:
 
@@ -201,6 +202,32 @@ This writes:
 
 - `example/ts_batch_t0.vtk`
 - `example/ts_batch_t1.vtk`
+
+If you want the per-slice field statistics as a CSV file, add `--stats-output`:
+
+```bash
+python3 icon2vtk.py \
+  data/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
+  data/icon_grid_0049_R02B04_G.nc \
+  ts \
+  --time-index 0,1 \
+  -o example/ts_batch.vtk \
+  --stats-output example/ts_stats.csv
+```
+
+This writes one CSV row per exported field slice with the columns:
+
+- `output_file`
+- `variable`
+- `time_index`
+- `level_index`
+- `min`
+- `max`
+- `mean`
+- `count`
+- `nan_count`
+
+If a selected dimension is not actually used by the exported variable, the corresponding `time_index` or `level_index` value is written as `nan` in the CSV output.
 
 If the grid file provides the ICON variable `parent_cell_index`, you can coarsen the exported field by one or more refinement levels:
 
@@ -804,6 +831,7 @@ python3 icon2vtk.py --help
 
 - `--time-index`: select one or more time records
 - `--level-index`: select one or more vertical levels for slice export
+- `--stats-output`: write per-slice field statistics to a CSV file
 - `--coarsen-level N`: coarsen by up to `N` ICON refinement levels when `parent_cell_index` is available
 - `--vtk-format ascii|binary`: choose legacy VTK encoding
 - `--vtk-precision float32|float64`: choose floating-point precision for VTK points and scalar arrays

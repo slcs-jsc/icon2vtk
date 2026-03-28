@@ -26,6 +26,7 @@ are easy to miss when reading the code:
 from __future__ import annotations
 
 import argparse
+import csv
 import math
 import sys
 import time
@@ -301,6 +302,13 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="List variables in the netCDF data file and exit",
     )
+    parser.add_argument(
+        "--stats-output",
+        help=(
+            "Optional CSV output path for exported field statistics "
+            "(output_file, variable, time/level indices, min, max, mean, count, nan_count)."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -309,6 +317,40 @@ def choose_output_path(args: argparse.Namespace) -> Path:
     if args.output:
         return Path(args.output)
     return Path(f"{args.variable}.vtk")
+
+
+def write_field_stats_csv(output_path: Path, field_exports: list[dict[str, object]]) -> None:
+    """Write one CSV row per exported field slice."""
+    with output_path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(
+            [
+                "output_file",
+                "variable",
+                "time_index",
+                "level_index",
+                "min",
+                "max",
+                "mean",
+                "count",
+                "nan_count",
+            ]
+        )
+        for export in field_exports:
+            stats = export["stats"]
+            writer.writerow(
+                [
+                    export["output_path"].name,
+                    export["variable"],
+                    export["time_index"] if export["time_index"] is not None else "nan",
+                    export["level_index"] if export["level_index"] is not None else "nan",
+                    f"{stats['min']:.16g}",
+                    f"{stats['max']:.16g}",
+                    f"{stats['mean']:.16g}",
+                    stats["count"],
+                    stats["nan_count"],
+                ]
+            )
 
 
 def parse_index_list(spec: str, option_name: str) -> list[int]:
@@ -1919,9 +1961,16 @@ def main() -> int:
     if not wants_field_export and args.output is not None:
         print("Error: --output is only valid when exporting a field", file=sys.stderr)
         return 1
+    if not wants_field_export and args.stats_output is not None:
+        print(
+            "Error: --stats-output is only valid when exporting a field",
+            file=sys.stderr,
+        )
+        return 1
 
     grid_path = Path(args.grid_file) if args.grid_file is not None else None
     output_path = choose_output_path(args) if wants_field_export else None
+    stats_output_path = Path(args.stats_output) if args.stats_output is not None else None
     bbox = tuple(args.bbox) if args.bbox is not None else None
     circle = tuple(args.circle) if args.circle is not None else None
 
@@ -1931,7 +1980,6 @@ def main() -> int:
         if args.coarsen_level < 0:
             raise ValueError("Coarsen level must be non-negative")
         radius = resolve_radius(args.radius)
-        cells = None
         field_exports: list[dict[str, object]] = []
         if wants_field_export:
             step_start = time.perf_counter()
@@ -2040,6 +2088,7 @@ def main() -> int:
                     field_exports.append(
                         {
                             "output_path": current_output_path,
+                            "variable": args.variable,
                             "cells": current_cells.shape[0],
                             "time_index": time_index if used_time_index else None,
                             "level_index": level_index if used_level_index else None,
@@ -2152,6 +2201,8 @@ def main() -> int:
                 f"Graticule: {graticule_path} "
                 f"({format_duration(time.perf_counter() - step_start)})"
             )
+        if stats_output_path is not None:
+            write_field_stats_csv(stats_output_path, field_exports)
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

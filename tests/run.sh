@@ -144,6 +144,32 @@ run_case_core_2d_ascii_vtk() {
   ok "$case_name"
 }
 
+# CSV stats regression: export one 2-D slice and verify the per-slice
+# statistics file, including the `nan` placeholder for an unused level index.
+run_case_core_2d_stats_csv() {
+  local case_name="core_2d_stats_csv"
+  local out="data/core_2d_stats_csv_ts_t1.vtk"
+  local stats="data/core_2d_stats_csv_ts_t1.csv"
+
+  reset_case_outputs "$out" "$stats"
+
+  log "Case: $case_name"
+  "$PYTHON_BIN" ../icon2vtk.py \
+    ../data/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
+    ../data/icon_grid_0049_R02B04_G.nc \
+    ts \
+    --time-index 1 \
+    --stats-output "$stats" \
+    -o "$out"
+
+  assert_file_exists_nonempty "$out" || return 1
+  assert_file_exists_nonempty "$stats" || return 1
+
+  compare_exact_or_diff "$stats" "data.ref/core_2d_stats_csv_ts_t1.csv" || return 1
+
+  ok "$case_name"
+}
+
 # 3D regression: export a single vertical level on the sphere with coarsening
 # enabled and a radial offset so the field is rendered above the globe.
 run_case_core_3d_sphere_coarsen() {
@@ -226,6 +252,7 @@ main() {
   for case_runner in \
     run_case_core_2d_plate_carree \
     run_case_core_2d_ascii_vtk \
+    run_case_core_2d_stats_csv \
     run_case_core_3d_sphere_coarsen \
     run_case_overlay_natural_earth
   do
