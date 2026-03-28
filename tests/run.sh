@@ -174,29 +174,43 @@ run_case_core_3d_sphere_coarsen() {
   ok "$case_name"
 }
 
-# Coastline overlay regression. This runs by default because Natural Earth
-# data is expected to be available; set RUN_COASTLINE_TESTS=0 to disable it.
-run_case_overlay_coastline() {
-  local case_name="overlay_coastline"
+# Natural Earth overlay regression. This runs by default because the line
+# overlays are expected to be available together; set
+# RUN_NATURAL_EARTH_TESTS=0 to disable them.
+run_case_overlay_natural_earth() {
+  local case_name="overlay_natural_earth"
   local coast="data/overlay_coastline.vtk"
+  local river="data/overlay_river.vtk"
+  local country="data/overlay_country.vtk"
+  local province="data/overlay_province.vtk"
 
-  reset_case_outputs "$coast"
+  reset_case_outputs "$coast" "$river" "$country" "$province"
 
-  if [[ "${RUN_COASTLINE_TESTS:-1}" == "0" ]]; then
-    skip "$case_name (RUN_COASTLINE_TESTS=0)"
+  if [[ "${RUN_NATURAL_EARTH_TESTS:-1}" == "0" ]]; then
+    skip "$case_name (RUN_NATURAL_EARTH_TESTS=0)"
     return 0
   fi
 
   log "Case: $case_name"
   if ! "$PYTHON_BIN" ../icon2vtk.py \
       --projection sphere \
-      --coastline-output "$coast"; then
-    skip "$case_name (coastline unavailable or offline)"
+      --coastline-output "$coast" \
+      --river-output "$river" \
+      --country-output "$country" \
+      --province-output "$province"; then
+    skip "$case_name (Natural Earth overlays unavailable or offline)"
     return 0
   fi
 
   assert_file_exists_nonempty "$coast" || return 1
+  assert_file_exists_nonempty "$river" || return 1
+  assert_file_exists_nonempty "$country" || return 1
+  assert_file_exists_nonempty "$province" || return 1
+
   compare_exact_or_diff "$coast" "data.ref/overlay_coastline.vtk" || return 1
+  compare_exact_or_diff "$river" "data.ref/overlay_river.vtk" || return 1
+  compare_exact_or_diff "$country" "data.ref/overlay_country.vtk" || return 1
+  compare_exact_or_diff "$province" "data.ref/overlay_province.vtk" || return 1
 
   ok "$case_name"
 }
@@ -213,7 +227,7 @@ main() {
     run_case_core_2d_plate_carree \
     run_case_core_2d_ascii_vtk \
     run_case_core_3d_sphere_coarsen \
-    run_case_overlay_coastline
+    run_case_overlay_natural_earth
   do
     "$case_runner" || true
   done

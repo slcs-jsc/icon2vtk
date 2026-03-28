@@ -166,6 +166,75 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--river-output",
+        help=(
+            "Optional VTK output path for river polylines derived from "
+            "Cartopy/Natural Earth."
+        ),
+    )
+    parser.add_argument(
+        "--river-resolution",
+        choices=("110m", "50m", "10m"),
+        default="110m",
+        help="Natural Earth river resolution to export (default: 110m)",
+    )
+    parser.add_argument(
+        "--river-radius-offset",
+        type=float,
+        default=15000.0,
+        help=(
+            "Add this offset to the exported river geometry. For sphere "
+            "this increases the sphere radius; for flat projections it "
+            "becomes a constant z offset (default: 15000)."
+        ),
+    )
+    parser.add_argument(
+        "--country-output",
+        help=(
+            "Optional VTK output path for country boundary polylines derived "
+            "from Cartopy/Natural Earth."
+        ),
+    )
+    parser.add_argument(
+        "--country-resolution",
+        choices=("110m", "50m", "10m"),
+        default="110m",
+        help="Natural Earth country boundary resolution to export (default: 110m)",
+    )
+    parser.add_argument(
+        "--country-radius-offset",
+        type=float,
+        default=12000.0,
+        help=(
+            "Add this offset to the exported country boundary geometry. For "
+            "sphere this increases the sphere radius; for flat projections it "
+            "becomes a constant z offset (default: 12000)."
+        ),
+    )
+    parser.add_argument(
+        "--province-output",
+        help=(
+            "Optional VTK output path for state or province boundary "
+            "polylines derived from Cartopy/Natural Earth."
+        ),
+    )
+    parser.add_argument(
+        "--province-resolution",
+        choices=("110m", "50m", "10m"),
+        default="110m",
+        help="Natural Earth province boundary resolution to export (default: 110m)",
+    )
+    parser.add_argument(
+        "--province-radius-offset",
+        type=float,
+        default=13000.0,
+        help=(
+            "Add this offset to the exported province boundary geometry. For "
+            "sphere this increases the sphere radius; for flat projections it "
+            "becomes a constant z offset (default: 13000)."
+        ),
+    )
+    parser.add_argument(
         "--bbox",
         nargs=4,
         type=float,
@@ -1407,18 +1476,51 @@ def write_coastline_vtk(
     plate_carree_seam_mode: str = "wrap",
 ) -> int:
     """Write Natural Earth coastlines as legacy VTK ``POLYDATA`` lines."""
+    return write_natural_earth_lines_vtk(
+        output_path=output_path,
+        projection=projection,
+        radius=radius,
+        resolution=resolution,
+        category="physical",
+        dataset_name="coastline",
+        feature_label="coastline",
+        radius_offset=radius_offset,
+        bbox=bbox,
+        circle=circle,
+        vtk_format=vtk_format,
+        vtk_precision=vtk_precision,
+        plate_carree_seam_mode=plate_carree_seam_mode,
+    )
+
+
+def write_natural_earth_lines_vtk(
+    output_path: Path,
+    projection: str,
+    radius: float,
+    resolution: str,
+    category: str,
+    dataset_name: str,
+    feature_label: str,
+    radius_offset: float = 0.0,
+    bbox: tuple[float, float, float, float] | None = None,
+    circle: tuple[float, float, float] | None = None,
+    vtk_format: str = "ascii",
+    vtk_precision: str = "float32",
+    plate_carree_seam_mode: str = "wrap",
+) -> int:
+    """Write a Natural Earth line dataset as legacy VTK ``POLYDATA``."""
     try:
         import cartopy.io.shapereader as shpreader
         from shapely.geometry import GeometryCollection, box
     except ImportError as exc:
         raise RuntimeError(
-            "Cartopy and Shapely are required for coastline export but are not available"
+            f"Cartopy and Shapely are required for {feature_label} export but are not available"
         ) from exc
 
     shapefile_path = shpreader.natural_earth(
         resolution=resolution,
-        category="physical",
-        name="coastline",
+        category=category,
+        name=dataset_name,
     )
 
     if bbox is not None and circle is not None:
@@ -1485,13 +1587,18 @@ def write_coastline_vtk(
                 line_lengths.append(int(projected.shape[0]))
 
     if not all_points:
-        raise RuntimeError("No coastline geometries were found in the Cartopy dataset")
+        raise RuntimeError(
+            f"No {feature_label} geometries were found in the Cartopy dataset"
+        )
 
     points = np.vstack(all_points)
     float_dtype, vtk_float_name = vtk_precision_spec(vtk_precision)
     with output_path.open("wb") as fh:
         write_header(
-            fh, f"Natural Earth coastlines [{resolution}]", "POLYDATA", vtk_format
+            fh,
+            f"Natural Earth {feature_label}s [{resolution}]",
+            "POLYDATA",
+            vtk_format,
         )
         fh.write(f"POINTS {points.shape[0]} {vtk_float_name}\n".encode("ascii"))
         write_numeric_array(
@@ -1515,6 +1622,96 @@ def write_coastline_vtk(
             write_numeric_array(fh, line_blob, vtk_format)
 
     return len(line_lengths)
+
+
+def write_river_vtk(
+    output_path: Path,
+    projection: str,
+    radius: float,
+    resolution: str,
+    radius_offset: float = 0.0,
+    bbox: tuple[float, float, float, float] | None = None,
+    circle: tuple[float, float, float] | None = None,
+    vtk_format: str = "ascii",
+    vtk_precision: str = "float32",
+    plate_carree_seam_mode: str = "wrap",
+) -> int:
+    """Write Natural Earth rivers as legacy VTK ``POLYDATA`` lines."""
+    return write_natural_earth_lines_vtk(
+        output_path=output_path,
+        projection=projection,
+        radius=radius,
+        resolution=resolution,
+        category="physical",
+        dataset_name="rivers_lake_centerlines",
+        feature_label="river",
+        radius_offset=radius_offset,
+        bbox=bbox,
+        circle=circle,
+        vtk_format=vtk_format,
+        vtk_precision=vtk_precision,
+        plate_carree_seam_mode=plate_carree_seam_mode,
+    )
+
+
+def write_country_vtk(
+    output_path: Path,
+    projection: str,
+    radius: float,
+    resolution: str,
+    radius_offset: float = 0.0,
+    bbox: tuple[float, float, float, float] | None = None,
+    circle: tuple[float, float, float] | None = None,
+    vtk_format: str = "ascii",
+    vtk_precision: str = "float32",
+    plate_carree_seam_mode: str = "wrap",
+) -> int:
+    """Write Natural Earth country boundaries as legacy VTK ``POLYDATA`` lines."""
+    return write_natural_earth_lines_vtk(
+        output_path=output_path,
+        projection=projection,
+        radius=radius,
+        resolution=resolution,
+        category="cultural",
+        dataset_name="admin_0_boundary_lines_land",
+        feature_label="country boundary",
+        radius_offset=radius_offset,
+        bbox=bbox,
+        circle=circle,
+        vtk_format=vtk_format,
+        vtk_precision=vtk_precision,
+        plate_carree_seam_mode=plate_carree_seam_mode,
+    )
+
+
+def write_province_vtk(
+    output_path: Path,
+    projection: str,
+    radius: float,
+    resolution: str,
+    radius_offset: float = 0.0,
+    bbox: tuple[float, float, float, float] | None = None,
+    circle: tuple[float, float, float] | None = None,
+    vtk_format: str = "ascii",
+    vtk_precision: str = "float32",
+    plate_carree_seam_mode: str = "wrap",
+) -> int:
+    """Write Natural Earth province boundaries as legacy VTK ``POLYDATA`` lines."""
+    return write_natural_earth_lines_vtk(
+        output_path=output_path,
+        projection=projection,
+        radius=radius,
+        resolution=resolution,
+        category="cultural",
+        dataset_name="admin_1_states_provinces_lines",
+        feature_label="province boundary",
+        radius_offset=radius_offset,
+        bbox=bbox,
+        circle=circle,
+        vtk_format=vtk_format,
+        vtk_precision=vtk_precision,
+        plate_carree_seam_mode=plate_carree_seam_mode,
+    )
 
 
 def build_axis_values(step: float, start: float, end: float) -> list[float]:
@@ -1698,7 +1895,11 @@ def main() -> int:
 
     wants_field_export = args.variable is not None or args.output is not None
     wants_overlay = (
-        args.coastline_output is not None or args.graticule_output is not None
+        args.coastline_output is not None
+        or args.river_output is not None
+        or args.country_output is not None
+        or args.province_output is not None
+        or args.graticule_output is not None
     )
     if wants_field_export and (
         data_path is None or args.grid_file is None or args.variable is None
@@ -1848,6 +2049,12 @@ def main() -> int:
                     )
         coastline_count = None
         coastline_path = None
+        river_count = None
+        river_path = None
+        country_count = None
+        country_path = None
+        province_count = None
+        province_path = None
         graticule_count = None
         graticule_path = None
         if args.coastline_output:
@@ -1867,6 +2074,63 @@ def main() -> int:
             )
             log_message(
                 f"Coastlines: {coastline_path} "
+                f"({format_duration(time.perf_counter() - step_start)})"
+            )
+        if args.river_output:
+            river_path = Path(args.river_output)
+            step_start = time.perf_counter()
+            river_count = write_river_vtk(
+                river_path,
+                projection=args.projection,
+                radius=radius,
+                resolution=args.river_resolution,
+                radius_offset=args.river_radius_offset,
+                bbox=bbox,
+                circle=circle,
+                vtk_format=args.vtk_format,
+                vtk_precision=args.vtk_precision,
+                plate_carree_seam_mode=args.plate_carree_seam_mode,
+            )
+            log_message(
+                f"Rivers: {river_path} "
+                f"({format_duration(time.perf_counter() - step_start)})"
+            )
+        if args.country_output:
+            country_path = Path(args.country_output)
+            step_start = time.perf_counter()
+            country_count = write_country_vtk(
+                country_path,
+                projection=args.projection,
+                radius=radius,
+                resolution=args.country_resolution,
+                radius_offset=args.country_radius_offset,
+                bbox=bbox,
+                circle=circle,
+                vtk_format=args.vtk_format,
+                vtk_precision=args.vtk_precision,
+                plate_carree_seam_mode=args.plate_carree_seam_mode,
+            )
+            log_message(
+                f"Country boundaries: {country_path} "
+                f"({format_duration(time.perf_counter() - step_start)})"
+            )
+        if args.province_output:
+            province_path = Path(args.province_output)
+            step_start = time.perf_counter()
+            province_count = write_province_vtk(
+                province_path,
+                projection=args.projection,
+                radius=radius,
+                resolution=args.province_resolution,
+                radius_offset=args.province_radius_offset,
+                bbox=bbox,
+                circle=circle,
+                vtk_format=args.vtk_format,
+                vtk_precision=args.vtk_precision,
+                plate_carree_seam_mode=args.plate_carree_seam_mode,
+            )
+            log_message(
+                f"Province boundaries: {province_path} "
                 f"({format_duration(time.perf_counter() - step_start)})"
             )
         if args.graticule_output:
@@ -1943,6 +2207,24 @@ def main() -> int:
             f"Wrote {coastline_path} with {coastline_count} coastline polylines "
             f"from Natural Earth {args.coastline_resolution} "
             f"(radius offset {args.coastline_radius_offset:.16g})"
+        )
+    if river_path is not None and river_count is not None:
+        print(
+            f"Wrote {river_path} with {river_count} river polylines "
+            f"from Natural Earth {args.river_resolution} "
+            f"(radius offset {args.river_radius_offset:.16g})"
+        )
+    if country_path is not None and country_count is not None:
+        print(
+            f"Wrote {country_path} with {country_count} country boundary polylines "
+            f"from Natural Earth {args.country_resolution} "
+            f"(radius offset {args.country_radius_offset:.16g})"
+        )
+    if province_path is not None and province_count is not None:
+        print(
+            f"Wrote {province_path} with {province_count} province boundary polylines "
+            f"from Natural Earth {args.province_resolution} "
+            f"(radius offset {args.province_radius_offset:.16g})"
         )
     if graticule_path is not None and graticule_count is not None:
         print(

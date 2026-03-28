@@ -20,7 +20,7 @@ The script supports a broader workflow for exploratory visualization:
 - coarsen the mesh by one or more ICON refinement levels using parent-child metadata
 - apply configurable radius offsets to fields and overlays
 - write legacy VTK in ASCII or binary format
-- add coastline and longitude-latitude graticule overlays
+- add coastline, river, country-boundary, province-boundary, and longitude-latitude graticule overlays
 - print basic statistics for each exported field slice
 
 The main script is:
@@ -44,6 +44,9 @@ The script combines both:
 Optionally, it can also write additional VTK polyline files containing:
 
 - coastlines
+- rivers
+- country boundaries
+- province boundaries
 - graticule lines
 
 These can be loaded into the same ParaView scene as overlays.
@@ -80,12 +83,12 @@ Required Python packages:
 - `numpy`
 - `netCDF4`
 
-Optional packages used only for coastline export:
+Optional packages used only for Natural Earth overlays:
 
 - `cartopy`
 - `shapely`
 
-If you do not request coastlines, the script does not need Cartopy or Shapely.
+If you do not request Natural Earth overlays, the script does not need Cartopy or Shapely.
 
 ## Installation
 
@@ -114,12 +117,12 @@ After that, you can run the converter with:
 python3 icon2vtk.py --help
 ```
 
-If you do not need coastline support, the required packages are only:
+If you do not need Natural Earth overlay support, the required packages are only:
 
 - `numpy`
 - `netCDF4`
 
-If `cartopy` is difficult to install on your system, you can still use the script without coastline export.
+If `cartopy` is difficult to install on your system, you can still use the script without coastline, river, country-boundary, or province-boundary export.
 
 ## Quick start with example data
 
@@ -229,7 +232,7 @@ Important details:
 
 ## Overlay-only mode
 
-You can also generate coastline and graticule VTK files without exporting any ICON field.
+You can also generate overlay VTK files without exporting any ICON field.
 
 This is useful when you only want to recreate the overlays for an existing ParaView scene.
 
@@ -242,12 +245,12 @@ python3 icon2vtk.py \
   --graticule-spacing 60 30
 ```
 
-Or to generate only coastlines on the sphere:
+Or to generate only country boundaries on the sphere:
 
 ```bash
 python3 icon2vtk.py \
-  --coastline-output example/coastlines_only.vtk \
-  --coastline-resolution 10m
+  --country-output example/countries_only.vtk \
+  --country-resolution 10m
 ```
 
 In overlay-only mode:
@@ -415,11 +418,18 @@ python3 icon2vtk.py \
   -o example/ts_ascii.vtk
 ```
 
-## Coastline overlays
+## Natural Earth line overlays
 
-The script can generate a separate VTK polyline file containing coastlines from Cartopy / Natural Earth.
+The script can generate separate VTK polyline files from several Natural Earth line datasets via Cartopy:
 
-This is useful because the ICON grid itself does not carry a general-purpose coastline line dataset suitable for plotting as a clean overlay.
+- coastlines
+- rivers
+- country boundaries
+- province boundaries
+
+This is useful because the ICON grid itself does not carry general-purpose linework for these map references in a clean overlay-ready form.
+
+### Coastlines
 
 Example:
 
@@ -461,6 +471,62 @@ Coastlines can be written at a slightly larger radius than the field:
 ```
 
 This helps avoid visual overlap or z-fighting when multiple datasets lie at nearly the same radius.
+
+### Rivers
+
+Rivers are exported from Natural Earth `rivers_lake_centerlines` as polyline overlays.
+
+Example:
+
+```bash
+python3 icon2vtk.py \
+  data/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
+  data/icon_grid_0049_R02B04_G.nc \
+  ts \
+  --time-index 1 \
+  -o example/ts_with_rivers.vtk \
+  --river-output example/rivers_10m.vtk \
+  --river-resolution 10m \
+  --river-radius-offset 1500
+```
+
+### Country boundaries
+
+Country boundaries are exported from Natural Earth `admin_0_boundary_lines_land`.
+
+Example:
+
+```bash
+python3 icon2vtk.py \
+  data/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
+  data/icon_grid_0049_R02B04_G.nc \
+  ts \
+  --time-index 1 \
+  -o example/ts_with_countries.vtk \
+  --country-output example/country_boundaries_10m.vtk \
+  --country-resolution 10m \
+  --country-radius-offset 1200
+```
+
+### Province boundaries
+
+Province or state boundaries are exported from Natural Earth `admin_1_states_provinces_lines`.
+
+Example:
+
+```bash
+python3 icon2vtk.py \
+  data/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
+  data/icon_grid_0049_R02B04_G.nc \
+  ts \
+  --time-index 1 \
+  -o example/ts_with_provinces.vtk \
+  --province-output example/province_boundaries_10m.vtk \
+  --province-resolution 10m \
+  --province-radius-offset 1300
+```
+
+All Natural Earth line overlays support the same `110m`, `50m`, and `10m` resolution choices and the same region filtering, projection, seam handling, and radius-offset behavior.
 
 ## Graticule overlays
 
@@ -581,7 +647,7 @@ For the ICON field itself:
 - each triangular cell has a center longitude and latitude
 - a cell is included if its center lies inside the requested box
 
-For coastlines and graticules:
+For overlays:
 
 - the overlay linework is clipped or filtered to the same region
 
@@ -633,7 +699,7 @@ For ICON cells:
 - the script computes the great-circle distance from each cell center to the requested center point
 - cells inside the requested radius are kept
 
-For coastlines and graticules:
+For overlays:
 
 - the lines are filtered to the same circular region
 
@@ -648,7 +714,7 @@ You can use either:
 
 but not both in the same command.
 
-## Full example with field, coastlines, and graticule
+## Full example with field and multiple overlays
 
 ```bash
 python3 icon2vtk.py \
@@ -662,6 +728,12 @@ python3 icon2vtk.py \
   --coastline-output example/coastlines_combo.vtk \
   --coastline-resolution 10m \
   --coastline-radius-offset 6000 \
+  --river-output example/rivers_combo.vtk \
+  --river-resolution 10m \
+  --river-radius-offset 6100 \
+  --country-output example/countries_combo.vtk \
+  --country-resolution 10m \
+  --country-radius-offset 6200 \
   --graticule-output example/graticule_combo.vtk \
   --graticule-spacing 30 15 \
   --graticule-radius-offset 6500
@@ -671,6 +743,8 @@ This produces:
 
 - a field surface
 - a coastline overlay
+- a river overlay
+- a country-boundary overlay
 - a longitude-latitude graticule
 
 all as separate files that can be opened together in ParaView.
@@ -680,10 +754,10 @@ all as separate files that can be opened together in ParaView.
 A typical workflow in ParaView is:
 
 1. Open the main field file.
-2. Open any overlay files such as coastlines and graticule.
+2. Open any overlay files such as coastlines, rivers, boundaries, and graticule.
 3. Click `Apply`.
 4. Color the field by the exported scalar.
-5. Set coastlines and graticule to a solid contrasting color.
+5. Set overlays to solid contrasting colors.
 6. Increase `Line Width` for the line datasets.
 
 Useful settings for overlays:
@@ -701,7 +775,7 @@ The script writes legacy VTK files, not XML VTK files.
 That means:
 
 - field surfaces are written as `UNSTRUCTURED_GRID`
-- coastlines and graticules are written as `POLYDATA`
+- overlays are written as `POLYDATA`
 
 This is an intentional choice because legacy VTK is simple and easy to generate directly from Python without additional VTK dependencies.
 
@@ -739,6 +813,15 @@ python3 icon2vtk.py --help
 - `--coastline-output`: write coastline overlay
 - `--coastline-resolution`: choose Natural Earth detail
 - `--coastline-radius-offset`: lift coastline overlay
+- `--river-output`: write river overlay
+- `--river-resolution`: choose Natural Earth river detail
+- `--river-radius-offset`: lift river overlay
+- `--country-output`: write country-boundary overlay
+- `--country-resolution`: choose Natural Earth country-boundary detail
+- `--country-radius-offset`: lift country-boundary overlay
+- `--province-output`: write province-boundary overlay
+- `--province-resolution`: choose Natural Earth province-boundary detail
+- `--province-radius-offset`: lift province-boundary overlay
 - `--graticule-output`: write longitude-latitude grid overlay
 - `--graticule-spacing`: choose graticule spacing
 - `--graticule-radius-offset`: lift graticule overlay
