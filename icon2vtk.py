@@ -29,6 +29,7 @@ import argparse
 import csv
 import html
 import math
+import os
 import sys
 import time
 from pathlib import Path
@@ -299,6 +300,13 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Field output format: legacy VTK, or XDMF with a companion HDF5 file "
             "for large HPC-oriented datasets (default: vtk)"
+        ),
+    )
+    parser.add_argument(
+        "--xdmf-shared-grid",
+        help=(
+            "Optional HDF5 path used to store shared XDMF grid geometry/topology "
+            "so multiple XDMF field exports can reuse one mesh file."
         ),
     )
     parser.add_argument(
@@ -1354,6 +1362,60 @@ def companion_hdf5_path(output_path: Path) -> Path:
     return output_path.with_suffix(".h5")
 
 
+def relative_hdf5_reference(xdmf_path: Path, hdf5_path: Path) -> str:
+    """Return an XDMF-friendly relative HDF5 path from one file to another."""
+    return os.path.relpath(hdf5_path, start=xdmf_path.parent)
+
+
+def write_xdmf_hdf5_array(
+    ds: Dataset,
+    name: str,
+    array: np.ndarray,
+    dimensions: tuple[str, ...],
+) -> None:
+    """Create one NETCDF4/HDF5 variable and fill it from the given array."""
+    ds.createVariable(name, array.dtype, dimensions)[:] = array
+
+
+def ensure_xdmf_shared_grid(
+    grid_h5_path: Path,
+    points: np.ndarray,
+    cells: np.ndarray,
+) -> None:
+    """Create or validate a reusable HDF5 file containing points and cells."""
+    if grid_h5_path.exists():
+        with Dataset(grid_h5_path) as ds:
+            if "points" not in ds.variables or "cells" not in ds.variables:
+                raise ValueError(
+                    f"Shared XDMF grid file {grid_h5_path} is missing points/cells datasets"
+                )
+            existing_points = ds.variables["points"][:]
+            existing_cells = ds.variables["cells"][:]
+            if existing_points.shape != points.shape or existing_cells.shape != cells.shape:
+                raise ValueError(
+                    f"Shared XDMF grid file {grid_h5_path} does not match the requested mesh shape"
+                )
+            if existing_points.dtype != points.dtype or existing_cells.dtype != cells.dtype:
+                raise ValueError(
+                    f"Shared XDMF grid file {grid_h5_path} does not match the requested mesh dtype"
+                )
+            if not np.array_equal(existing_points, points) or not np.array_equal(
+                existing_cells, cells
+            ):
+                raise ValueError(
+                    f"Shared XDMF grid file {grid_h5_path} does not match the requested mesh contents"
+                )
+        return
+
+    with Dataset(grid_h5_path, "w", format="NETCDF4") as ds:
+        ds.createDimension("point", points.shape[0])
+        ds.createDimension("coord", 3)
+        ds.createDimension("cell", cells.shape[0])
+        ds.createDimension("vertex", 3)
+        write_xdmf_hdf5_array(ds, "points", points, ("point", "coord"))
+        write_xdmf_hdf5_array(ds, "cells", cells, ("cell", "vertex"))
+
+
 def write_xdmf(
     output_path: Path,
     points: np.ndarray,
@@ -1363,6 +1425,7 @@ def write_xdmf(
     title: str,
     units: str | None,
     vtk_precision: str,
+    shared_grid_path: Path | None = None,
 ) -> None:
     """Write the field mesh as XDMF with a companion HDF5 data file."""
     float_dtype, _ = vtk_precision_spec(vtk_precision)
@@ -1370,16 +1433,22 @@ def write_xdmf(
     cells_out = np.asarray(cells, dtype=np.int32)
     values_out = np.asarray(values, dtype=float_dtype)
 
-    h5_path = companion_hdf5_path(output_path)
-    with Dataset(h5_path, "w", format="NETCDF4") as ds:
-        ds.createDimension("point", points_out.shape[0])
-        ds.createDimension("coord", 3)
+    field_h5_path = companion_hdf5_path(output_path)
+    with Dataset(field_h5_path, "w", format="NETCDF4") as ds:
         ds.createDimension("cell", cells_out.shape[0])
-        ds.createDimension("vertex", 3)
+        write_xdmf_hdf5_array(ds, "values", values_out, ("cell",))
 
-        ds.createVariable("points", points_out.dtype, ("point", "coord"))[:] = points_out
-        ds.createVariable("cells", cells_out.dtype, ("cell", "vertex"))[:] = cells_out
-        ds.createVariable("values", values_out.dtype, ("cell",))[:] = values_out
+    if shared_grid_path is None:
+        grid_h5_path = field_h5_path
+        with Dataset(grid_h5_path, "a") as ds:
+            ds.createDimension("point", points_out.shape[0])
+            ds.createDimension("coord", 3)
+            ds.createDimension("vertex", 3)
+            write_xdmf_hdf5_array(ds, "points", points_out, ("point", "coord"))
+            write_xdmf_hdf5_array(ds, "cells", cells_out, ("cell", "vertex"))
+    else:
+        grid_h5_path = shared_grid_path
+        ensure_xdmf_shared_grid(grid_h5_path, points_out, cells_out)
 
     points_number_type, points_precision = xdmf_number_type_and_precision(points_out)
     cells_number_type, cells_precision = xdmf_number_type_and_precision(cells_out)
@@ -1387,7 +1456,10 @@ def write_xdmf(
     scalar_name = sanitize_name(variable_name)
     title_text = html.escape(title, quote=True)
     units_text = html.escape(units, quote=True) if units else None
-    h5_ref = html.escape(h5_path.name, quote=True)
+    grid_h5_ref = html.escape(relative_hdf5_reference(output_path, grid_h5_path), quote=True)
+    field_h5_ref = html.escape(
+        relative_hdf5_reference(output_path, field_h5_path), quote=True
+    )
 
     xdmf_lines = [
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
@@ -1400,7 +1472,7 @@ def write_xdmf(
             "        "
             f"<DataItem Format=\"HDF\" Dimensions=\"{cells_out.shape[0]} 3\" "
             f"NumberType=\"{cells_number_type}\" Precision=\"{cells_precision}\">"
-            f"{h5_ref}:/cells</DataItem>"
+            f"{grid_h5_ref}:/cells</DataItem>"
         ),
         "      </Topology>",
         "      <Geometry GeometryType=\"XYZ\">",
@@ -1408,7 +1480,7 @@ def write_xdmf(
             "        "
             f"<DataItem Format=\"HDF\" Dimensions=\"{points_out.shape[0]} 3\" "
             f"NumberType=\"{points_number_type}\" Precision=\"{points_precision}\">"
-            f"{h5_ref}:/points</DataItem>"
+            f"{grid_h5_ref}:/points</DataItem>"
         ),
         "      </Geometry>",
         (
@@ -1419,7 +1491,7 @@ def write_xdmf(
             "        "
             f"<DataItem Format=\"HDF\" Dimensions=\"{values_out.shape[0]}\" "
             f"NumberType=\"{values_number_type}\" Precision=\"{values_precision}\">"
-            f"{h5_ref}:/values</DataItem>"
+            f"{field_h5_ref}:/values</DataItem>"
         ),
         "      </Attribute>",
         f"      <Information Name=\"title\" Value=\"{title_text}\"/>",
@@ -1448,6 +1520,7 @@ def write_field_output(
     field_format: str,
     vtk_format: str,
     vtk_precision: str,
+    xdmf_shared_grid: Path | None = None,
 ) -> None:
     """Write one field export in the selected output format."""
     if field_format == "vtk":
@@ -1473,6 +1546,7 @@ def write_field_output(
             title,
             units,
             vtk_precision,
+            shared_grid_path=xdmf_shared_grid,
         )
         return
     raise ValueError(f"Unsupported field format {field_format!r}")
@@ -2175,10 +2249,19 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+    if not wants_field_export and args.xdmf_shared_grid is not None:
+        print(
+            "Error: --xdmf-shared-grid is only valid when exporting a field",
+            file=sys.stderr,
+        )
+        return 1
 
     grid_path = Path(args.grid_file) if args.grid_file is not None else None
     output_path = choose_output_path(args) if wants_field_export else None
     stats_output_path = Path(args.stats_output) if args.stats_output is not None else None
+    xdmf_shared_grid_path = (
+        Path(args.xdmf_shared_grid) if args.xdmf_shared_grid is not None else None
+    )
     bbox = tuple(args.bbox) if args.bbox is not None else None
     circle = tuple(args.circle) if args.circle is not None else None
 
@@ -2296,6 +2379,7 @@ def main() -> int:
                         args.field_format,
                         args.vtk_format,
                         args.vtk_precision,
+                        xdmf_shared_grid_path,
                     )
                     log_message(
                         f"Field output: {current_output_path} "
@@ -2439,6 +2523,8 @@ def main() -> int:
             )
             if args.field_format == "xdmf":
                 print(f"Companion HDF5: {companion_hdf5_path(export['output_path'])}")
+                if xdmf_shared_grid_path is not None:
+                    print(f"Shared grid HDF5: {xdmf_shared_grid_path}")
     if args.projection != "sphere" or not wants_field_export:
         print(f"Projection: {args.projection}")
     if args.projection == "plate-carree":

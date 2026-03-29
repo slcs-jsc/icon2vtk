@@ -229,6 +229,89 @@ PY
   ok "$case_name"
 }
 
+# Shared-grid regression: two separate XDMF field exports should be able to
+# reference one common HDF5 mesh file while keeping only scalar data per field.
+run_case_core_2d_xdmf_shared_grid() {
+  local case_name="core_2d_xdmf_shared_grid"
+  local out_ts="data/core_2d_xdmf_shared_ts.xdmf"
+  local h5_ts="data/core_2d_xdmf_shared_ts.h5"
+  local out_pr="data/core_2d_xdmf_shared_pr.xdmf"
+  local h5_pr="data/core_2d_xdmf_shared_pr.h5"
+  local grid_h5="data/core_2d_xdmf_shared_grid.h5"
+
+  reset_case_outputs "$out_ts" "$h5_ts" "$out_pr" "$h5_pr" "$grid_h5"
+
+  log "Case: $case_name"
+  "$PYTHON_BIN" ../icon2vtk.py \
+    ../data/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
+    ../data/icon_grid_0049_R02B04_G.nc \
+    ts \
+    --time-index 1 \
+    --field-format xdmf \
+    --xdmf-shared-grid "$grid_h5" \
+    -o "$out_ts"
+
+  "$PYTHON_BIN" ../icon2vtk.py \
+    ../data/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
+    ../data/icon_grid_0049_R02B04_G.nc \
+    pr \
+    --time-index 1 \
+    --field-format xdmf \
+    --xdmf-shared-grid "$grid_h5" \
+    -o "$out_pr"
+
+  assert_file_exists_nonempty "$out_ts" || return 1
+  assert_file_exists_nonempty "$h5_ts" || return 1
+  assert_file_exists_nonempty "$out_pr" || return 1
+  assert_file_exists_nonempty "$h5_pr" || return 1
+  assert_file_exists_nonempty "$grid_h5" || return 1
+
+  if ! "$PYTHON_BIN" - "$out_ts" "$h5_ts" "$out_pr" "$h5_pr" "$grid_h5" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+from netCDF4 import Dataset
+
+ts_xdmf = Path(sys.argv[1])
+ts_h5 = Path(sys.argv[2])
+pr_xdmf = Path(sys.argv[3])
+pr_h5 = Path(sys.argv[4])
+grid_h5 = Path(sys.argv[5])
+
+def validate_xdmf(xdmf_path: Path, field_h5: Path, grid_h5: Path) -> None:
+    root = ET.parse(xdmf_path).getroot()
+    grid = root.find("./Domain/Grid")
+    topology = grid.find("./Topology/DataItem")
+    geometry = grid.find("./Geometry/DataItem")
+    attribute = grid.find("./Attribute/DataItem")
+    if (topology.text or "").strip() != f"{grid_h5.name}:/cells":
+        raise SystemExit(f"Unexpected topology reference in {xdmf_path}: {topology.text}")
+    if (geometry.text or "").strip() != f"{grid_h5.name}:/points":
+        raise SystemExit(f"Unexpected geometry reference in {xdmf_path}: {geometry.text}")
+    if (attribute.text or "").strip() != f"{field_h5.name}:/values":
+        raise SystemExit(f"Unexpected attribute reference in {xdmf_path}: {attribute.text}")
+
+validate_xdmf(ts_xdmf, ts_h5, grid_h5)
+validate_xdmf(pr_xdmf, pr_h5, grid_h5)
+
+with Dataset(grid_h5) as ds:
+    if sorted(ds.variables) != ["cells", "points"]:
+        raise SystemExit(f"Unexpected shared-grid datasets: {sorted(ds.variables)}")
+
+for field_h5 in (ts_h5, pr_h5):
+    with Dataset(field_h5) as ds:
+        if sorted(ds.variables) != ["values"]:
+            raise SystemExit(f"Unexpected field datasets in {field_h5}: {sorted(ds.variables)}")
+PY
+  then
+    bad "Shared-grid XDMF/HDF5 validation failed"
+    return 1
+  fi
+
+  ok "$case_name"
+}
+
 # Range-filter regression: drop cells outside a scalar interval and verify the
 # resulting ASCII VTK only contains values within that interval.
 run_case_core_2d_value_range_filter() {
@@ -400,6 +483,7 @@ main() {
     run_case_core_2d_plate_carree \
     run_case_core_2d_ascii_vtk \
     run_case_core_2d_xdmf \
+    run_case_core_2d_xdmf_shared_grid \
     run_case_core_2d_value_range_filter \
     run_case_core_2d_stats_csv \
     run_case_core_3d_sphere_coarsen \

@@ -204,6 +204,40 @@ This writes:
 
 The XDMF file contains the mesh and array metadata, while the HDF5 sidecar holds the heavy numeric arrays. This is usually the better choice when the legacy VTK output becomes too large for efficient storage or transfer.
 
+If you want multiple XDMF field exports to reuse one mesh file, add `--xdmf-shared-grid` and point it to a common HDF5 path:
+
+```bash
+python3 icon2vtk.py \
+  data/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
+  data/icon_grid_0049_R02B04_G.nc \
+  ts \
+  --time-index 1 \
+  --field-format xdmf \
+  --xdmf-shared-grid example/shared_grid.h5 \
+  -o example/ts.xdmf
+```
+
+Then export another variable with the same processed mesh settings:
+
+```bash
+python3 icon2vtk.py \
+  data/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
+  data/icon_grid_0049_R02B04_G.nc \
+  pr \
+  --time-index 1 \
+  --field-format xdmf \
+  --xdmf-shared-grid example/shared_grid.h5 \
+  -o example/pr.xdmf
+```
+
+In that setup:
+
+- `example/shared_grid.h5` stores the shared points and cells once
+- `example/ts.h5` stores only the `ts` values
+- `example/pr.h5` stores only the `pr` values
+
+This saves disk space when several exported variables share exactly the same processed mesh. The tool validates that the shared grid file matches the requested mesh and raises an error if it does not. That means all geometry-affecting options must stay the same across those exports, including projection, precision, subsetting, coarsening, seam handling, and field radius offset.
+
 `--time-index` and `--level-index` accept either a single index or a comma-separated list of indices. When you pass multiple indices, the script exports one field file per selected slice combination and appends suffixes such as `_t0`, `_t1`, `_l45`, or `_t1_l45` to the output filename.
 
 For example, to export two timesteps of a 2-D field:
