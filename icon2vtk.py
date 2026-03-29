@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import html
 import math
 import sys
 import time
@@ -74,7 +75,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "-o",
         "--output",
-        help="Output VTK file path (default: ./<variable>.vtk in the current working directory)",
+        help=(
+            "Field output path (default: ./<variable>.vtk for --field-format vtk, "
+            "./<variable>.xdmf for --field-format xdmf)"
+        ),
     )
     parser.add_argument(
         "--time-index",
@@ -289,6 +293,15 @@ def parse_args() -> argparse.Namespace:
         help="Legacy VTK output format (default: binary)",
     )
     parser.add_argument(
+        "--field-format",
+        choices=("vtk", "xdmf"),
+        default="vtk",
+        help=(
+            "Field output format: legacy VTK, or XDMF with a companion HDF5 file "
+            "for large HPC-oriented datasets (default: vtk)"
+        ),
+    )
+    parser.add_argument(
         "--vtk-precision",
         choices=("float32", "float64"),
         default="float32",
@@ -331,10 +344,11 @@ def parse_args() -> argparse.Namespace:
 
 
 def choose_output_path(args: argparse.Namespace) -> Path:
-    """Return the explicit output path or fall back to ``<variable>.vtk``."""
+    """Return the explicit output path or fall back to a format-appropriate name."""
     if args.output:
         return Path(args.output)
-    return Path(f"{args.variable}.vtk")
+    suffix = ".vtk" if args.field_format == "vtk" else ".xdmf"
+    return Path(f"{args.variable}{suffix}")
 
 
 def write_field_stats_csv(output_path: Path, field_exports: list[dict[str, object]]) -> None:
@@ -1325,6 +1339,145 @@ def write_legacy_vtk(
         )
 
 
+def xdmf_number_type_and_precision(array: np.ndarray) -> tuple[str, int]:
+    """Map a NumPy dtype to XDMF ``NumberType`` and byte precision."""
+    dtype = np.dtype(array.dtype)
+    if np.issubdtype(dtype, np.integer):
+        return "Int", dtype.itemsize
+    if np.issubdtype(dtype, np.floating):
+        return "Float", dtype.itemsize
+    raise ValueError(f"Unsupported XDMF dtype {dtype!r}")
+
+
+def companion_hdf5_path(output_path: Path) -> Path:
+    """Return the HDF5 sidecar path for an XDMF field export."""
+    return output_path.with_suffix(".h5")
+
+
+def write_xdmf(
+    output_path: Path,
+    points: np.ndarray,
+    cells: np.ndarray,
+    values: np.ndarray,
+    variable_name: str,
+    title: str,
+    units: str | None,
+    vtk_precision: str,
+) -> None:
+    """Write the field mesh as XDMF with a companion HDF5 data file."""
+    float_dtype, _ = vtk_precision_spec(vtk_precision)
+    points_out = np.asarray(points, dtype=float_dtype)
+    cells_out = np.asarray(cells, dtype=np.int32)
+    values_out = np.asarray(values, dtype=float_dtype)
+
+    h5_path = companion_hdf5_path(output_path)
+    with Dataset(h5_path, "w", format="NETCDF4") as ds:
+        ds.createDimension("point", points_out.shape[0])
+        ds.createDimension("coord", 3)
+        ds.createDimension("cell", cells_out.shape[0])
+        ds.createDimension("vertex", 3)
+
+        ds.createVariable("points", points_out.dtype, ("point", "coord"))[:] = points_out
+        ds.createVariable("cells", cells_out.dtype, ("cell", "vertex"))[:] = cells_out
+        ds.createVariable("values", values_out.dtype, ("cell",))[:] = values_out
+
+    points_number_type, points_precision = xdmf_number_type_and_precision(points_out)
+    cells_number_type, cells_precision = xdmf_number_type_and_precision(cells_out)
+    values_number_type, values_precision = xdmf_number_type_and_precision(values_out)
+    scalar_name = sanitize_name(variable_name)
+    title_text = html.escape(title, quote=True)
+    units_text = html.escape(units, quote=True) if units else None
+    h5_ref = html.escape(h5_path.name, quote=True)
+
+    xdmf_lines = [
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
+        "<!DOCTYPE Xdmf SYSTEM \"Xdmf.dtd\" []>",
+        "<Xdmf Version=\"3.0\">",
+        "  <Domain>",
+        f"    <Grid Name=\"{title_text}\" GridType=\"Uniform\">",
+        f"      <Topology TopologyType=\"Triangle\" NumberOfElements=\"{cells_out.shape[0]}\">",
+        (
+            "        "
+            f"<DataItem Format=\"HDF\" Dimensions=\"{cells_out.shape[0]} 3\" "
+            f"NumberType=\"{cells_number_type}\" Precision=\"{cells_precision}\">"
+            f"{h5_ref}:/cells</DataItem>"
+        ),
+        "      </Topology>",
+        "      <Geometry GeometryType=\"XYZ\">",
+        (
+            "        "
+            f"<DataItem Format=\"HDF\" Dimensions=\"{points_out.shape[0]} 3\" "
+            f"NumberType=\"{points_number_type}\" Precision=\"{points_precision}\">"
+            f"{h5_ref}:/points</DataItem>"
+        ),
+        "      </Geometry>",
+        (
+            f"      <Attribute Name=\"{html.escape(scalar_name, quote=True)}\" "
+            "AttributeType=\"Scalar\" Center=\"Cell\">"
+        ),
+        (
+            "        "
+            f"<DataItem Format=\"HDF\" Dimensions=\"{values_out.shape[0]}\" "
+            f"NumberType=\"{values_number_type}\" Precision=\"{values_precision}\">"
+            f"{h5_ref}:/values</DataItem>"
+        ),
+        "      </Attribute>",
+        f"      <Information Name=\"title\" Value=\"{title_text}\"/>",
+    ]
+    if units_text is not None:
+        xdmf_lines.append(f"      <Information Name=\"units\" Value=\"{units_text}\"/>")
+    xdmf_lines.extend(
+        [
+            "    </Grid>",
+            "  </Domain>",
+            "</Xdmf>",
+            "",
+        ]
+    )
+    output_path.write_text("\n".join(xdmf_lines), encoding="utf-8")
+
+
+def write_field_output(
+    output_path: Path,
+    points: np.ndarray,
+    cells: np.ndarray,
+    values: np.ndarray,
+    variable_name: str,
+    title: str,
+    units: str | None,
+    field_format: str,
+    vtk_format: str,
+    vtk_precision: str,
+) -> None:
+    """Write one field export in the selected output format."""
+    if field_format == "vtk":
+        write_legacy_vtk(
+            output_path,
+            points,
+            cells,
+            values,
+            variable_name,
+            title,
+            units,
+            vtk_format,
+            vtk_precision,
+        )
+        return
+    if field_format == "xdmf":
+        write_xdmf(
+            output_path,
+            points,
+            cells,
+            values,
+            variable_name,
+            title,
+            units,
+            vtk_precision,
+        )
+        return
+    raise ValueError(f"Unsupported field format {field_format!r}")
+
+
 def sanitize_name(name: str) -> str:
     """Map arbitrary variable names to VTK-safe scalar array names."""
     cleaned = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in name)
@@ -2132,7 +2285,7 @@ def main() -> int:
                         f"({format_duration(time.perf_counter() - step_start)})"
                     )
                     step_start = time.perf_counter()
-                    write_legacy_vtk(
+                    write_field_output(
                         current_output_path,
                         current_points,
                         current_cells,
@@ -2140,6 +2293,7 @@ def main() -> int:
                         args.variable,
                         title,
                         units,
+                        args.field_format,
                         args.vtk_format,
                         args.vtk_precision,
                     )
@@ -2283,6 +2437,8 @@ def main() -> int:
                 f"Wrote {export['output_path']} with {export['cells']} cells "
                 f"and variable {args.variable}{index_text}"
             )
+            if args.field_format == "xdmf":
+                print(f"Companion HDF5: {companion_hdf5_path(export['output_path'])}")
     if args.projection != "sphere" or not wants_field_export:
         print(f"Projection: {args.projection}")
     if args.projection == "plate-carree":

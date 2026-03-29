@@ -11,7 +11,7 @@
 [![doi](https://zenodo.org/badge/DOI/10.5281/zenodo.19246491.svg)](https://doi.org/10.5281/zenodo.19246491)
 [![SWH](https://archive.softwareheritage.org/badge/origin/https://github.com/slcs-jsc/icon2vtk/)](https://archive.softwareheritage.org/browse/origin/?origin_url=https://github.com/slcs-jsc/icon2vtk)
 
-ICON2VTK is a lightweight Python command-line tool that converts cell-based ICON model output from netCDF into legacy VTK files for direct visualization in ParaView.
+ICON2VTK is a lightweight Python command-line tool that converts cell-based ICON model output from netCDF into visualization-ready files for direct use in ParaView, with legacy VTK and XDMF/HDF5 field export support.
 
 The script supports a broader workflow for exploratory visualization:
 
@@ -21,6 +21,7 @@ The script supports a broader workflow for exploratory visualization:
 - coarsen the mesh by one or more ICON refinement levels using parent-child metadata
 - apply configurable radius offsets to fields and overlays
 - write legacy VTK in ASCII or binary format
+- write XDMF with a companion HDF5 file for large HPC-style datasets
 - add coastline, river, country-boundary, province-boundary, and longitude-latitude graticule overlays
 - print field statistics and optionally write them to CSV
 
@@ -40,7 +41,7 @@ The script combines both:
 1. It reads the ICON mesh from the grid file.
 2. It reads one selected variable from the netCDF data file.
 3. It resolves that variable to one or more 2-D slices by selecting time and level indices when needed.
-4. It writes one or more legacy VTK files that ParaView can display as unstructured surfaces, either on the sphere or in `plate-carree` projection.
+4. It writes one or more field files that ParaView can display as unstructured surfaces, either as legacy VTK or as XDMF with an HDF5 sidecar, on the sphere or in `plate-carree` projection.
 
 Optionally, it can also write additional VTK polyline files containing:
 
@@ -185,7 +186,25 @@ python3 icon2vtk.py \
 
 This reads the variable `ts` from the ICON netCDF data file, uses the ICON grid from the grid file, and writes `ts.vtk` in binary VTK format by default when you run the command from the repository root.
 
-`--time-index` and `--level-index` accept either a single index or a comma-separated list of indices. When you pass multiple indices, the script exports one VTK file per selected slice combination and appends suffixes such as `_t0`, `_t1`, `_l45`, or `_t1_l45` to the output filename.
+For larger datasets, you can switch the field export to XDMF with a companion HDF5 file:
+
+```bash
+python3 icon2vtk.py \
+  data/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
+  data/icon_grid_0049_R02B04_G.nc \
+  ts \
+  --field-format xdmf \
+  -o example/ts.xdmf
+```
+
+This writes:
+
+- `example/ts.xdmf`
+- `example/ts.h5`
+
+The XDMF file contains the mesh and array metadata, while the HDF5 sidecar holds the heavy numeric arrays. This is usually the better choice when the legacy VTK output becomes too large for efficient storage or transfer.
+
+`--time-index` and `--level-index` accept either a single index or a comma-separated list of indices. When you pass multiple indices, the script exports one field file per selected slice combination and appends suffixes such as `_t0`, `_t1`, `_l45`, or `_t1_l45` to the output filename.
 
 For example, to export two timesteps of a 2-D field:
 
@@ -407,9 +426,9 @@ Here:
 - `--time-index 1` selects the second available timestep
 - `--level-index 45` selects one vertical model level
 
-Both options also accept comma-separated lists such as `--time-index 0,1` or `--level-index 10,20,50`. In that case, the script exports one VTK file per selected slice combination.
+Both options also accept comma-separated lists such as `--time-index 0,1` or `--level-index 10,20,50`. In that case, the script exports one field file per selected slice combination.
 
-The output is still a surface VTK file, not a full 3-D volume. In other words, the script writes one horizontal slice over the ICON sphere for the chosen level.
+The output is still a surface mesh file, not a full 3-D volume. In other words, the script writes one horizontal slice over the ICON sphere for the chosen level.
 
 If a variable has more than one non-singleton non-cell dimension besides `time`, the script rejects it instead of guessing how `--level-index` should be applied.
 
@@ -819,14 +838,15 @@ If the line datasets lie exactly on the field surface, they can visually interfe
 
 ## Notes on the output format
 
-The script writes legacy VTK files, not XML VTK files.
+The script writes legacy VTK field and overlay files by default, and also supports XDMF field export with a companion HDF5 sidecar.
 
 That means:
 
 - field surfaces are written as `UNSTRUCTURED_GRID`
-- overlays are written as `POLYDATA`
+- overlays are written as legacy VTK `POLYDATA`
+- XDMF field exports reference triangle topology and cell-centered data stored in HDF5
 
-This is an intentional choice because legacy VTK is simple and easy to generate directly from Python without additional VTK dependencies.
+Legacy VTK remains the default because it is simple and easy to generate directly from Python without additional VTK dependencies in the writer path, while XDMF/HDF5 is available as the more scalable option for large field datasets.
 
 ## Current limitations
 
@@ -840,6 +860,7 @@ It does not currently handle:
 - vertex-based variables
 - vector field export as VTK vectors
 - XML VTK output formats such as `.vtu` or `.vtp`
+- XDMF export for overlays
 
 ## Getting help
 

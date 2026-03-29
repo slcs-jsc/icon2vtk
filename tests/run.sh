@@ -144,6 +144,91 @@ run_case_core_2d_ascii_vtk() {
   ok "$case_name"
 }
 
+# XDMF regression: export one time slice as XDMF with an HDF5 sidecar and
+# validate the manifest plus the stored array shapes and dtypes.
+run_case_core_2d_xdmf() {
+  local case_name="core_2d_xdmf"
+  local out="data/core_2d_xdmf_ts_t1.xdmf"
+  local h5="data/core_2d_xdmf_ts_t1.h5"
+
+  reset_case_outputs "$out" "$h5"
+
+  log "Case: $case_name"
+  "$PYTHON_BIN" ../icon2vtk.py \
+    ../data/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
+    ../data/icon_grid_0049_R02B04_G.nc \
+    ts \
+    --time-index 1 \
+    --field-format xdmf \
+    -o "$out"
+
+  assert_file_exists_nonempty "$out" || return 1
+  assert_file_exists_nonempty "$h5" || return 1
+
+  if ! "$PYTHON_BIN" - "$out" "$h5" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+from netCDF4 import Dataset
+
+xdmf_path = Path(sys.argv[1])
+h5_path = Path(sys.argv[2])
+root = ET.parse(xdmf_path).getroot()
+
+grid = root.find("./Domain/Grid")
+if grid is None:
+    raise SystemExit("Missing XDMF grid")
+if grid.get("GridType") != "Uniform":
+    raise SystemExit(f"Unexpected grid type: {grid.get('GridType')}")
+
+topology = grid.find("./Topology")
+geometry = grid.find("./Geometry")
+attribute = grid.find("./Attribute")
+if topology is None or geometry is None or attribute is None:
+    raise SystemExit("Missing topology, geometry, or attribute in XDMF")
+if topology.get("TopologyType") != "Triangle":
+    raise SystemExit(f"Unexpected topology type: {topology.get('TopologyType')}")
+if geometry.get("GeometryType") != "XYZ":
+    raise SystemExit(f"Unexpected geometry type: {geometry.get('GeometryType')}")
+if attribute.get("Center") != "Cell":
+    raise SystemExit(f"Unexpected attribute center: {attribute.get('Center')}")
+
+expected_refs = {
+    "./Topology/DataItem": f"{h5_path.name}:/cells",
+    "./Geometry/DataItem": f"{h5_path.name}:/points",
+    "./Attribute/DataItem": f"{h5_path.name}:/values",
+}
+for xpath, expected in expected_refs.items():
+    node = grid.find(xpath)
+    if node is None or (node.text or "").strip() != expected:
+        raise SystemExit(f"Unexpected HDF5 reference for {xpath}: {node.text if node is not None else None}")
+
+with Dataset(h5_path) as ds:
+    points = ds.variables["points"]
+    cells = ds.variables["cells"]
+    values = ds.variables["values"]
+    if points.shape[1] != 3:
+        raise SystemExit(f"Unexpected points shape: {points.shape}")
+    if cells.shape[1] != 3:
+        raise SystemExit(f"Unexpected cells shape: {cells.shape}")
+    if values.shape[0] != cells.shape[0]:
+        raise SystemExit(f"Value/cell mismatch: {values.shape[0]} != {cells.shape[0]}")
+    if str(points.dtype) != "float32":
+        raise SystemExit(f"Unexpected points dtype: {points.dtype}")
+    if str(values.dtype) != "float32":
+        raise SystemExit(f"Unexpected values dtype: {values.dtype}")
+    if str(cells.dtype) != "int32":
+        raise SystemExit(f"Unexpected cells dtype: {cells.dtype}")
+PY
+  then
+    bad "XDMF/HDF5 validation failed"
+    return 1
+  fi
+
+  ok "$case_name"
+}
+
 # Range-filter regression: drop cells outside a scalar interval and verify the
 # resulting ASCII VTK only contains values within that interval.
 run_case_core_2d_value_range_filter() {
@@ -314,6 +399,7 @@ main() {
   for case_runner in \
     run_case_core_2d_plate_carree \
     run_case_core_2d_ascii_vtk \
+    run_case_core_2d_xdmf \
     run_case_core_2d_value_range_filter \
     run_case_core_2d_stats_csv \
     run_case_core_3d_sphere_coarsen \
