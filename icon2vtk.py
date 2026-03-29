@@ -309,6 +309,24 @@ def parse_args() -> argparse.Namespace:
             "(output_file, variable, time/level indices, min, max, mean, count, nan_count)."
         ),
     )
+    parser.add_argument(
+        "--field-min",
+        type=float,
+        default=None,
+        help=(
+            "Keep only triangles whose field value is greater than or equal to "
+            "this threshold."
+        ),
+    )
+    parser.add_argument(
+        "--field-max",
+        type=float,
+        default=None,
+        help=(
+            "Keep only triangles whose field value is less than or equal to "
+            "this threshold."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -529,6 +547,37 @@ def subset_field_mesh(
 
     subset_points, subset_cells = subset_mesh(
         points, cells, cell_mask, region_description
+    )
+    return subset_points, subset_cells, values[cell_mask]
+
+
+def filter_field_value_range(
+    points: np.ndarray,
+    cells: np.ndarray,
+    values: np.ndarray,
+    field_min: float | None = None,
+    field_max: float | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Keep only cells whose scalar value falls inside the requested range."""
+    if field_min is None and field_max is None:
+        return points, cells, values
+    if field_min is not None and field_max is not None and field_min > field_max:
+        raise ValueError("--field-min must be less than or equal to --field-max")
+
+    cell_mask = np.isfinite(values)
+    region_parts = ["requested field range"]
+    if field_min is not None:
+        cell_mask &= values >= field_min
+        region_parts.append(f"value >= {field_min:.16g}")
+    if field_max is not None:
+        cell_mask &= values <= field_max
+        region_parts.append(f"value <= {field_max:.16g}")
+
+    subset_points, subset_cells = subset_mesh(
+        points,
+        cells,
+        cell_mask,
+        ", ".join(region_parts),
     )
     return subset_points, subset_cells, values[cell_mask]
 
@@ -1967,6 +2016,12 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+    if not wants_field_export and (args.field_min is not None or args.field_max is not None):
+        print(
+            "Error: --field-min/--field-max are only valid when exporting a field",
+            file=sys.stderr,
+        )
+        return 1
 
     grid_path = Path(args.grid_file) if args.grid_file is not None else None
     output_path = choose_output_path(args) if wants_field_export else None
@@ -2042,6 +2097,13 @@ def main() -> int:
                         bbox=bbox,
                         circle=circle,
                     )
+                    current_points, current_cells, current_values = filter_field_value_range(
+                        current_points,
+                        current_cells,
+                        current_values,
+                        args.field_min,
+                        args.field_max,
+                    )
                     current_points, current_cells = project_mesh(
                         current_points,
                         current_cells,
@@ -2094,6 +2156,8 @@ def main() -> int:
                             "level_index": level_index if used_level_index else None,
                             "stats": stats,
                             "applied_coarsen_level": applied_coarsen_level,
+                            "field_min": args.field_min,
+                            "field_max": args.field_max,
                         }
                     )
         coastline_count = None
@@ -2237,6 +2301,13 @@ def main() -> int:
             )
     if wants_field_export and args.field_radius_offset != 0.0:
         print(f"Field radius offset: {args.field_radius_offset:.16g}")
+    if wants_field_export and (args.field_min is not None or args.field_max is not None):
+        parts = []
+        if args.field_min is not None:
+            parts.append(f"min={args.field_min:.16g}")
+        if args.field_max is not None:
+            parts.append(f"max={args.field_max:.16g}")
+        print(f"Field value filter: {', '.join(parts)}")
     if field_exports:
         for export in field_exports:
             stats = export["stats"]

@@ -144,6 +144,68 @@ run_case_core_2d_ascii_vtk() {
   ok "$case_name"
 }
 
+# Range-filter regression: drop cells outside a scalar interval and verify the
+# resulting ASCII VTK only contains values within that interval.
+run_case_core_2d_value_range_filter() {
+  local case_name="core_2d_value_range_filter"
+  local base_out="data/core_2d_value_range_base.vtk"
+  local filtered_out="data/core_2d_value_range_filtered.vtk"
+  local field_min="270"
+  local field_max="280"
+  local base_cells filtered_cells
+
+  reset_case_outputs "$base_out" "$filtered_out"
+
+  log "Case: $case_name"
+  "$PYTHON_BIN" ../icon2vtk.py \
+    ../data/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
+    ../data/icon_grid_0049_R02B04_G.nc \
+    ts \
+    --time-index 1 \
+    --vtk-format ascii \
+    -o "$base_out"
+
+  "$PYTHON_BIN" ../icon2vtk.py \
+    ../data/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
+    ../data/icon_grid_0049_R02B04_G.nc \
+    ts \
+    --time-index 1 \
+    --vtk-format ascii \
+    --field-min "$field_min" \
+    --field-max "$field_max" \
+    -o "$filtered_out"
+
+  assert_file_exists_nonempty "$base_out" || return 1
+  assert_file_exists_nonempty "$filtered_out" || return 1
+
+  base_cells="$(awk '/^CELLS / { print $2; exit }' "$base_out")"
+  filtered_cells="$(awk '/^CELLS / { print $2; exit }' "$filtered_out")"
+  if [[ -z "$base_cells" || -z "$filtered_cells" ]]; then
+    bad "Failed to read CELLS count from generated VTK output"
+    return 1
+  fi
+  if (( filtered_cells <= 0 || filtered_cells >= base_cells )); then
+    bad "Unexpected filtered cell count: base=$base_cells filtered=$filtered_cells"
+    return 1
+  fi
+
+  if ! awk -v min="$field_min" -v max="$field_max" '
+      /^LOOKUP_TABLE default$/ { in_scalars=1; next }
+      in_scalars && NF {
+        value = $1 + 0
+        if (value < min || value > max) {
+          exit 1
+        }
+      }
+      END { exit 0 }
+    ' "$filtered_out"; then
+    bad "Filtered VTK contains scalar values outside [$field_min, $field_max]"
+    return 1
+  fi
+
+  ok "$case_name"
+}
+
 # CSV stats regression: export one 2-D slice and verify the per-slice
 # statistics file, including the `nan` placeholder for an unused level index.
 run_case_core_2d_stats_csv() {
@@ -252,6 +314,7 @@ main() {
   for case_runner in \
     run_case_core_2d_plate_carree \
     run_case_core_2d_ascii_vtk \
+    run_case_core_2d_value_range_filter \
     run_case_core_2d_stats_csv \
     run_case_core_3d_sphere_coarsen \
     run_case_overlay_natural_earth

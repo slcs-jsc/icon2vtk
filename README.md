@@ -17,12 +17,12 @@ The script supports a broader workflow for exploratory visualization:
 
 - export one or more 2-D ICON cell fields by selecting time and level indices
 - subset the domain by a bounding box or circular region
+- filter triangles by exported field value ranges
 - coarsen the mesh by one or more ICON refinement levels using parent-child metadata
 - apply configurable radius offsets to fields and overlays
 - write legacy VTK in ASCII or binary format
 - add coastline, river, country-boundary, province-boundary, and longitude-latitude graticule overlays
-- print basic statistics for each exported field slice
-- optionally write field statistics to a CSV file for later analysis
+- print field statistics and optionally write them to CSV
 
 The main script is:
 
@@ -256,6 +256,28 @@ Important details:
 - the requested level is an upper bound, not a guarantee; the script stops early if no further complete sibling families can be collapsed and reports `requested=... applied=...` after the export
 - if you also subset the domain, incomplete families near the subset boundary are kept at their current resolution instead of being forced to coarsen
 - higher coarsening levels should currently be treated as approximate for visualization; the cell count may collapse as expected, but exact parent-face connectivity is not guaranteed at the deepest levels
+
+You can also remove uninteresting triangles directly during export by filtering
+on the selected field values:
+
+```bash
+python3 icon2vtk.py \
+  data/aes_amip_atm_2d_P1D_ml_19790101T000000Z.nc \
+  data/icon_grid_0049_R02B04_G.nc \
+  ts \
+  --time-index 1 \
+  --field-min 270 \
+  --field-max 280 \
+  -o example/ts_270_280.vtk
+```
+
+This keeps only cells whose scalar value is finite and lies inside the closed
+interval `[270, 280]`. The filter is applied after optional coarsening and
+spatial subsetting. `--field-min` and `--field-max` affect only the exported
+field triangles; overlays are not filtered by field value and still only follow
+`--bbox` and `--circle`. This lets you combine value-filtered fields with the
+same contextual overlays to build layered ParaView scenes from different
+variables or value bands.
 
 ## Overlay-only mode
 
